@@ -225,9 +225,10 @@ export function simulateDay(
     }
   }
 
-  // Отзывы и рейтинг (ТЗ §16).
+  // Отзывы и рейтинг (ТЗ §16). reputationSpeed — множитель сложности (ТЗ §36):
+  // у «Профессионала» рейтинг живее реагирует на свежие отзывы (§6.8 паспорта).
   const reviews: Review[] = generateReviews(restaurant, date, totals.seatedBySegment, satisfaction, reviewsRng);
-  addReviews(restaurant, reviews, date);
+  addReviews(restaurant, reviews, date, DIFFICULTIES[draft.difficultyId]?.reputationSpeed ?? 1);
 
   // Возвратные когорты (ТЗ §17).
   createCohorts(restaurant, date, totals.seatedBySegment, satisfaction);

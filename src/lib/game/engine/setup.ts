@@ -38,6 +38,8 @@ export interface SetupOptions {
   seed: number;
   restaurantName: string;
   locationId: string;
+  /** Сложность (ТЗ §36): novice | standard | professional. По умолчанию standard. */
+  difficultyId?: string;
   premisesSize: PremisesSize;
   renovation: RenovationLevel;
   loanAmount: number;
@@ -95,11 +97,12 @@ export function defaultPools(): Record<RoleId, { count: number; fatigue: number;
   return pools;
 }
 
-/** Создание новой игры (визард открытия, ТЗ §9.2). */
+/** Создание новой игры (визард открытия, ТЗ §9.2). Сложность ТЗ §36 задаётся opts.difficultyId. */
 export function createGame(opts: SetupOptions): GameState {
   const loc = LOCATIONS_MAP[opts.locationId] ?? LOCATIONS[1];
   const prem = PREMISES_SIZES[opts.premisesSize];
-  const diff = DIFFICULTIES.standard;
+  // Старые вызовы без difficultyId и битые id → Стандарт (сейвы миграцией не затронуты).
+  const diff = DIFFICULTIES[opts.difficultyId ?? 'standard'] ?? DIFFICULTIES.standard;
   const date: GameDate = { week: 1, day: 0, hour: 8 };
 
   const renovationCost = prem.areaM2 * loc.renovationCostPerM2[opts.renovation];
@@ -188,7 +191,7 @@ export function createGame(opts: SetupOptions): GameState {
     day: 0,
     phase: 'managing',
     status: 'open',
-    difficultyId: 'standard',
+    difficultyId: diff.id,
     restaurant,
     history: {
       dayLogs: [],

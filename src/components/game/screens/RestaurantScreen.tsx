@@ -13,6 +13,8 @@ import { InfoHint } from '../hints';
 import { DISHES_MAP } from '@/lib/game/content/dishes';
 import { DAYS_RU } from '@/lib/game/engine';
 import { HallScene } from '../HallScene';
+import { TutorialCoach } from '../TutorialCoach';
+import { GoalsPanel } from '../GoalsPanel';
 import {
   Users,
   Banknote,
@@ -99,6 +101,9 @@ export function RestaurantScreen() {
           tone={restaurant.reputation.rating >= 4.2 ? 'good' : restaurant.reputation.rating >= 3.8 ? 'warn' : 'bad'}
         />
       </div>
+
+      {/* Туториал первых недель + контекстные советы (аудит №15) */}
+      <TutorialCoach />
 
       {dayWarnings.length > 0 && <WarningBanner warnings={dayWarnings} />}
 
@@ -187,8 +192,10 @@ export function RestaurantScreen() {
         </Tabs>
         </div>
 
-        {/* Правая колонка: BSC + прогноз */}
+        {/* Правая колонка: цели года + BSC + прогноз */}
         <div className="space-y-4">
+          <GoalsPanel />
+
           <SectionCard title="BSC" icon={Gauge}>
             {weekResult ? (
               <div className="space-y-3">

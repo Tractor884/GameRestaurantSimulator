@@ -7,7 +7,7 @@
 import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, ScoreBar, MetricRow, EmptyState, money, moneyShort } from '../widgets';
 import { FINAL_SCORE_WEIGHTS, QUARTERLY_WEEKS } from '@/lib/game/config/bsc.config';
-import { STATUS_LABELS, WIN_CONDITIONS } from '@/lib/game/config/difficulty.config';
+import { STATUS_LABELS, difficultyWin, difficultyOf } from '@/lib/game/config/difficulty.config';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { ClipboardList, Trophy, Lightbulb, Target, CalendarClock } from 'lucide-react';
@@ -15,6 +15,8 @@ import type { FinalScore } from '@/lib/game/types';
 
 export function QuarterlyScreen() {
   const state = useGame((s) => s.state)!;
+  const win = difficultyWin(state.difficultyId);
+  const diff = difficultyOf(state.difficultyId);
 
   const review = state.weekResult?.quarterlyReview ?? null;
   const finalScore = state.phase === 'gameover' ? (state.weekResult?.finalScore ?? null) : null;
@@ -107,13 +109,18 @@ export function QuarterlyScreen() {
         <SectionCard title="Финальный счёт" icon={Trophy}>
           <div className="flex items-start gap-3">
             <Target className="h-5 w-5 text-amber-700 shrink-0 mt-0.5" aria-hidden />
-            <p className="text-sm text-stone-600">
-              Игра идёт 52 недели. Победа на 52-й неделе: BSC квартала ≥{' '}
-              {WIN_CONDITIONS.minBscAvgQuarter}, рейтинг ≥ {WIN_CONDITIONS.minRating}, накопленная
-              прибыль ≥ {moneyShort(WIN_CONDITIONS.minCumulativeProfit)}, денег на счёте ≥{' '}
-              {moneyShort(WIN_CONDITIONS.minCash)} и {WIN_CONDITIONS.minPositiveOpWeeks} недель
-              положительной операционной прибыли подряд.
-            </p>
+            <div className="text-sm text-stone-600 space-y-1.5">
+              <p className="flex items-center gap-1.5">
+                <Badge variant="secondary" className="bg-stone-100 text-stone-600 hover:bg-stone-100 shrink-0">{diff.name}</Badge>
+                планки победы этой сложности:
+              </p>
+              <p>
+                Игра идёт 52 недели. Победа на 52-й неделе: BSC квартала ≥{' '}
+                {win.minBscAvgQuarter}, рейтинг ≥ {win.minRating}, накопленная прибыль ≥{' '}
+                {moneyShort(win.minCumulativeProfit)}, денег на счёте ≥ {moneyShort(win.minCash)} и{' '}
+                {win.minPositiveOpWeeks} недель положительной операционной прибыли подряд.
+              </p>
+            </div>
           </div>
         </SectionCard>
       )}

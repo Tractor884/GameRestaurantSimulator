@@ -31,6 +31,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { CsvMenuTools } from '../CsvMenuTools';
 import {
   BookOpen,
   Plus,
@@ -142,19 +143,22 @@ export function MenuScreen() {
         title="Меню ресторана"
         icon={BookOpen}
         right={
-          <Dialog open={addOpen} onOpenChange={setAddOpen}>
-            <DialogTrigger asChild>
-              <Button className="bg-amber-600 hover:bg-amber-700 text-white h-11" disabled={disabled}>
-                <Plus className="h-4 w-4 mr-1" aria-hidden />
-                Добавить блюдо
-              </Button>
-            </DialogTrigger>
-            <AddDishDialog
-              menuIds={menuIds}
-              onAdd={(id) => toggleDish(id)}
-              onClose={() => setAddOpen(false)}
-            />
-          </Dialog>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <CsvMenuTools />
+            <Dialog open={addOpen} onOpenChange={setAddOpen}>
+              <DialogTrigger asChild>
+                <Button className="bg-amber-600 hover:bg-amber-700 text-white h-11" disabled={disabled}>
+                  <Plus className="h-4 w-4 mr-1" aria-hidden />
+                  Добавить блюдо
+                </Button>
+              </DialogTrigger>
+              <AddDishDialog
+                menuIds={menuIds}
+                onAdd={(id) => toggleDish(id)}
+                onClose={() => setAddOpen(false)}
+              />
+            </Dialog>
+          </div>
         }
       >
         {menuDishes.length === 0 ? (

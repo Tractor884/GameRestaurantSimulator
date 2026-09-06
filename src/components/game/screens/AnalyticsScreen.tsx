@@ -24,6 +24,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
+import { CsvReportTools } from '../CsvReportTools';
 import { Receipt, Users, TrendingUp, BarChart3, Gauge, Percent } from 'lucide-react';
 
 const TOOLTIP_STYLE = { borderRadius: 8, border: '1px solid #e7e5e4', fontSize: 12 } as const;
@@ -216,9 +217,12 @@ export function AnalyticsScreen() {
         title="Таблица недель"
         icon={BarChart3}
         right={
-          <span className="text-xs text-stone-400 whitespace-nowrap">
-            всего {weekStats.length}{allWeeks.length > 10 ? ' · видно 10, остальные ниже' : ''}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-stone-400 whitespace-nowrap">
+              всего {weekStats.length}{allWeeks.length > 10 ? ' · видно 10, остальные ниже' : ''}
+            </span>
+            <CsvReportTools />
+          </div>
         }
       >
         <div className="overflow-x-auto rounded-lg border border-stone-100">

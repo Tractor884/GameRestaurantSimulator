@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { toast } from 'sonner';
 import { useGame, type ScreenId } from '@/lib/game/store/gameStore';
 import { EVENT_TEMPLATES_MAP } from '@/lib/game/config/risks.config';
+import { DIFFICULTIES } from '@/lib/game/config/difficulty.config';
 import { moneyShort, money } from './widgets';
 import { cn } from '@/lib/utils';
 import {
@@ -35,6 +36,7 @@ import {
   Banknote,
   TrendingUp,
   Loader2,
+  Gauge,
 } from 'lucide-react';
 
 import { RestaurantScreen } from './screens/RestaurantScreen';
@@ -126,6 +128,31 @@ export function GameShell() {
 
   const [navOpen, setNavOpen] = useState(false);
 
+  // Горячие клавиши (ТЗ §31.7 — быстрый доступ): D/Д — день, W/Н — неделя.
+  // Не срабатываем при вводе текста (input/textarea/contenteditable) и при
+  // открытых диалогах/модалках (иначе «д» в названии ресторана прожигала день).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      if (document.querySelector('[data-state="open"][role="dialog"], [role="dialog"][data-state="open"]')) return;
+      const s = useGame.getState();
+      if (!s.state || s.busy || s.state.phase === 'gameover') return;
+      if (s.state.activeEvents.some((ev) => !ev.resolved)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'd' || key === 'в') {
+        e.preventDefault();
+        s.runDay();
+      } else if (key === 'w' || key === 'н' || key === 'ц') {
+        e.preventDefault();
+        s.runWeek();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const weekDayLabel = state ? `Неделя ${state.week} · ${DAYS_RU[state.day]}` : '';
 
   if (!state || !restaurant) return null;
@@ -145,7 +172,21 @@ export function GameShell() {
             <Utensils className="h-5 w-5 text-stone-700" aria-hidden />
           </button>
           <div className="min-w-0">
-            <p className="font-bold text-stone-900 truncate leading-tight">{restaurant.name}</p>
+            <div className="flex items-center gap-2">
+              <p className="font-bold text-stone-900 truncate leading-tight">{restaurant.name}</p>
+              <Badge
+                className={cn(
+                  'hidden sm:inline-flex shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0',
+                  state.difficultyId === 'novice' && 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100',
+                  state.difficultyId === 'professional' && 'bg-red-100 text-red-800 hover:bg-red-100',
+                  state.difficultyId !== 'novice' && state.difficultyId !== 'professional' && 'bg-stone-100 text-stone-600 hover:bg-stone-100',
+                )}
+                title={`Сложность года: условия победы и цена ошибок (см. Квартальный разбор)`}
+              >
+                <Gauge className="h-3 w-3 mr-1" aria-hidden />
+                {DIFFICULTIES[state.difficultyId]?.name ?? 'Стандарт'}
+              </Badge>
+            </div>
             <p className="text-xs text-stone-500">{weekDayLabel}</p>
           </div>
 

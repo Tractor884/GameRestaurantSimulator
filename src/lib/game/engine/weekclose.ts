@@ -27,7 +27,7 @@ import type {
 } from '../types';
 import { FINANCE, TAXES } from '../config/finance.config';
 import { LOANS } from '../config/loans.config';
-import { WIN_CONDITIONS, LOSE_CONDITIONS, DIFFICULTIES } from '../config/difficulty.config';
+import { LOSE_CONDITIONS, DIFFICULTIES, difficultyWin } from '../config/difficulty.config';
 import { EQUIPMENT_LEVELS, DEPRECIATION_MONTHS, ALCOHOL_LICENSE } from '../config/premises.config';
 import { QUARTERLY_WEEKS } from '../config/bsc.config';
 import { RISKS_META } from '../config/risks.config';
@@ -142,8 +142,8 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
         loan.nextPaymentWeek += 4;
         loan.overduePayments = 0;
       } else {
-        // Просрочка: штраф, рост риска (ТЗ §18.10).
-        const fine = Math.round(payment * LOANS.overdueFineRate);
+        // Просрочка: штраф × fineSeverity (сложность ТЗ §36), рост риска (ТЗ §18.10).
+        const fine = Math.round(payment * LOANS.overdueFineRate * (DIFFICULTIES[draft.difficultyId]?.fineSeverity ?? 1));
         addTransaction(restaurant, weekDate, 'fine', fine, 'out', 'Штраф за просрочку кредита');
         loan.nextPaymentWeek += 4;
         loan.overduePayments += 1;
@@ -254,15 +254,17 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     gameOver = true;
     draft.phase = 'gameover';
   } else if (week >= 52) {
-    // Финал 52 недели.
+    // Финал 52 недели. Условия победы зависят от сложности (ТЗ §36/§37.3):
+    // Новичку достаточно 9 млн и рейтинга 4.0, Профессионалу нужно 15 млн и 4.3.
+    const win = difficultyWin(draft.difficultyId);
     const lastQuarter = draft.history.weekStats.slice(-12);
     const bscAvg = lastQuarter.length > 0 ? lastQuarter.reduce((s, w) => s + w.bsc, 0) / lastQuarter.length : 0;
     const won =
-      restaurant.finance.cash >= WIN_CONDITIONS.minCash &&
-      bscAvg >= WIN_CONDITIONS.minBscAvgQuarter &&
-      restaurant.reputation.rating >= WIN_CONDITIONS.minRating &&
-      draft.history.cumulativeNetProfit >= WIN_CONDITIONS.minCumulativeProfit &&
-      draft.history.positiveOpWeeks >= WIN_CONDITIONS.minPositiveOpWeeks;
+      restaurant.finance.cash >= win.minCash &&
+      bscAvg >= win.minBscAvgQuarter &&
+      restaurant.reputation.rating >= win.minRating &&
+      draft.history.cumulativeNetProfit >= win.minCumulativeProfit &&
+      draft.history.positiveOpWeeks >= win.minPositiveOpWeeks;
     gameStatus = won ? (bscAvg >= 85 && restaurant.reputation.rating >= 4.5 ? 'excellent' : 'sustainable') : 'stable';
     draft.phase = 'gameover';
     gameOver = true;

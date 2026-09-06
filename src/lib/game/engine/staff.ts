@@ -187,8 +187,13 @@ export function updateFatigue(
     // реакции игрока даже при катастрофическом дне.
     let growth = (roleLoad - 0.9) * 12;
     if (scheduled === 0) growth = Math.min(growth, -STAFF_DYNAMICS.restRecovery * 0.9);
-    growth = clamp(growth, -5, 10) * diffFatigueRate;
-    pool.fatigue = clamp(pool.fatigue + growth, 0, 100);
+    growth = clamp(growth, -5, 10);
+    // Сложность (ТЗ §36) staffFatigueRate ускоряет НАКОПЛЕНИЕ усталости, но НЕ
+    // восстановление: отдых — физиологический процесс одной скорости на любой
+    // сложности (иначе Professional «выздоравливал» бы тоже в ×1.3 быстрее и
+    // множитель взаимно гасился на равновесии, что показал difficulty-test).
+    const scaled = growth > 0 ? growth * diffFatigueRate : growth;
+    pool.fatigue = clamp(pool.fatigue + scaled, 0, 100);
     // Мораль: усталость и перегрузка давят, чаевые поднимают (в day.ts).
     const targetMorale = clamp(85 - pool.fatigue * 0.5 - Math.max(0, roleLoad - 1) * 30, 0, 100);
     pool.morale += (targetMorale - pool.morale) * 0.3;

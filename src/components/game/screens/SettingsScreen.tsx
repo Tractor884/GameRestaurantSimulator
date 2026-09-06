@@ -6,7 +6,8 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { useGame, type SaveMeta } from '@/lib/game/store/gameStore';
-import { SectionCard, money } from '../widgets';
+import { SectionCard, money, moneyShort } from '../widgets';
+import { difficultyWin as winOf, difficultyOf as diffOf } from '@/lib/game/config/difficulty.config';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -177,8 +178,11 @@ export function SettingsScreen() {
           <p>
             <b className="text-stone-800">Экономический симулятор ресторана.</b> Игра длится{' '}
             <b className="text-stone-800">52 недели</b>: управляйте меню, складом, персоналом и
-            деньгами, реагируйте на события. Победа — сбалансированный результат: BSC ≥ 70, рейтинг
-            ≥ 4.2, накопленная прибыль ≥ 5 млн ₽.
+            деньгами, реагируйте на события. Текущая сложность —{' '}
+            <b className="text-stone-800">{diffOf(state.difficultyId).name}</b>; победа: BSC ≥{' '}
+            {winOf(state.difficultyId).minBscAvgQuarter}, рейтинг ≥ {winOf(state.difficultyId).minRating}, накопленная
+            прибыль ≥ {moneyShort(winOf(state.difficultyId).minCumulativeProfit)}, касса ≥{' '}
+            {moneyShort(winOf(state.difficultyId).minCash)}.
           </p>
           <div className="grid sm:grid-cols-3 gap-3">
             <div className="rounded-lg bg-stone-50 p-3">

@@ -8,6 +8,7 @@ import { useMemo, useState } from 'react';
 import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, KpiCard, MetricRow, EmptyState, WarningBanner, money, moneyShort, pct } from '../widgets';
 import { InfoHint } from '../hints';
+import { CsvReportTools } from '../CsvReportTools';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -131,6 +132,7 @@ export function FinanceScreen() {
           <SectionCard
             title={pnl ? `Отчёт о прибылях и убытках — неделя ${pnl.week}` : 'Отчёт о прибылях и убытках'}
             icon={LineChart}
+            right={<CsvReportTools />}
           >
             {pnl ? (
               <div className="grid md:grid-cols-2 gap-x-8">

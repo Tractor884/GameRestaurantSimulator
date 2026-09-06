@@ -95,8 +95,13 @@ function segmentFlavor(segId: SegmentId): string {
 /**
  * Эффективный рейтинг — байесовский с окном свежести (ТЗ §16.5).
  * EffectiveRating = (prior×n + Σ Score×Weight×Freshness) / (prior + Σ Weight×Freshness).
+ *
+ * reputationSpeed (сложность ТЗ §36): делит вес приора. Математика:
+ * при prior=45 и speed=1.6 фактический приор = 28 «виртуальных отзывов» —
+ * новые отзывы перевешивают прошлое быстрее, рейтинг «живее»; при speed=0.6
+ * приор = 75 — инертный рейтинг, ошибки прощаются дольше.
  */
-export function recomputeRating(restaurant: Restaurant, now: GameDate): void {
+export function recomputeRating(restaurant: Restaurant, now: GameDate, reputationSpeed = 1): void {
   const rep = restaurant.reputation;
   let weightedSum = 0;
   let weightSum = 0;
@@ -106,7 +111,7 @@ export function recomputeRating(restaurant: Restaurant, now: GameDate): void {
     weightedSum += r.score * r.weight * freshness;
     weightSum += r.weight * freshness;
   }
-  const prior = rep.priorReviews ?? REPUTATION_CONFIG.priorReviews;
+  const prior = Math.max(1, (rep.priorReviews ?? REPUTATION_CONFIG.priorReviews) / reputationSpeed);
   const priorRating = rep.priorRating ?? REPUTATION_CONFIG.priorRating;
   rep.rating =
     weightSum > 0
@@ -115,13 +120,13 @@ export function recomputeRating(restaurant: Restaurant, now: GameDate): void {
   rep.rating = clamp(rep.rating, 1, 5);
 }
 
-export function addReviews(restaurant: Restaurant, reviews: Review[], now: GameDate): void {
+export function addReviews(restaurant: Restaurant, reviews: Review[], now: GameDate, reputationSpeed = 1): void {
   restaurant.reputation.windowReviews.push(...reviews);
   // Окно: последние 100 отзывов (ТЗ §16.6).
   if (restaurant.reputation.windowReviews.length > REPUTATION_CONFIG.windowSize) {
     restaurant.reputation.windowReviews.splice(0, restaurant.reputation.windowReviews.length - REPUTATION_CONFIG.windowSize);
   }
-  recomputeRating(restaurant, now);
+  recomputeRating(restaurant, now, reputationSpeed);
 }
 
 /* ============================= ВОЗВРАТНЫЕ ГОСТИ ============================= */

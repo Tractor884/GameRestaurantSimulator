@@ -40,9 +40,11 @@ import {
   ArrowRight,
   ArrowLeft,
   Check,
+  Gauge,
 } from 'lucide-react';
 
 const STEPS = [
+  { id: 'difficulty', label: 'Сложность', icon: Gauge },
   { id: 'district', label: 'Район', icon: MapPin },
   { id: 'premises', label: 'Помещение', icon: Building2 },
   { id: 'renovation', label: 'Ремонт', icon: Paintbrush },
@@ -55,6 +57,7 @@ const STEPS = [
 export function SetupWizard() {
   const startGame = useGame((s) => s.startGame);
   const [step, setStep] = useState(0);
+  const [difficultyId, setDifficultyId] = useState<string>('standard');
   const [locationId, setLocationId] = useState('tverskaya');
   const [premisesSize, setPremisesSize] = useState<PremisesSize>('medium');
   const [renovation, setRenovation] = useState<RenovationLevel>('standard');
@@ -71,7 +74,7 @@ export function SetupWizard() {
 
   const loc = LOCATIONS.find((l) => l.id === locationId)!;
   const prem = PREMISES_SIZES[premisesSize];
-  const diff = DIFFICULTIES.standard;
+  const diff = DIFFICULTIES[difficultyId] ?? DIFFICULTIES.standard;
 
   const costs = useMemo(() => {
     const renovationCost = prem.areaM2 * loc.renovationCostPerM2[renovation];
@@ -88,12 +91,13 @@ export function SetupWizard() {
       left: budget - spent - 1_000_000, // запас на оборотку
       monthly: annuityPayment(loanAmount, diff.loanRate, diff.loanTermMonths),
     };
-  }, [prem, loc, renovation, equip, loanAmount, veranda, alcohol]);
+  }, [prem, loc, renovation, equip, loanAmount, veranda, alcohol, diff]);
 
   const launch = () => {
     startGame({
       seed: Math.floor(Math.random() * 1_000_000) + 1000,
       restaurantName: name,
+      difficultyId: diff.id,
       locationId,
       premisesSize,
       renovation,
@@ -106,7 +110,7 @@ export function SetupWizard() {
   };
 
   const canNext = () => {
-    if (step === 5) return menuIds.length >= 12;
+    if (step === 6) return menuIds.length >= 12;
     return true;
   };
 
@@ -153,7 +157,79 @@ export function SetupWizard() {
       {/* Контент */}
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-6xl mx-auto px-4 py-6">
+          {/* Шаг 0 — сложность (ТЗ §36) */}
           {step === 0 && (
+            <div>
+              <div className="mb-4">
+                <h2 className="text-lg font-bold text-stone-900">Сложность года</h2>
+                <p className="text-sm text-stone-500">
+                  Влияет на стартовый капитал, ставку кредита, чувствительность гостей к ценам,
+                    частоту событий и планки победы на 52-й неделе. Экономика ресторана одинакова — отличается цена ошибки.
+                </p>
+              </div>
+              <div className="grid md:grid-cols-3 gap-4">
+                {Object.values(DIFFICULTIES).map((d) => {
+                  const selected = difficultyId === d.id;
+                  return (
+                    <Card
+                      key={d.id}
+                      className={cn(
+                        'cursor-pointer border transition-all hover:shadow-md',
+                        selected ? 'border-amber-400 ring-2 ring-amber-200' : 'border-stone-200',
+                      )}
+                      onClick={() => setDifficultyId(d.id)}
+                      aria-pressed={selected}
+                    >
+                      <CardContent className="p-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={cn(
+                                'flex h-8 w-8 items-center justify-center rounded-lg',
+                                d.id === 'novice' && 'bg-emerald-100 text-emerald-700',
+                                d.id === 'standard' && 'bg-amber-100 text-amber-700',
+                                d.id === 'professional' && 'bg-red-100 text-red-700',
+                              )}
+                              aria-hidden
+                            >
+                              <Gauge className="h-4 w-4" />
+                            </span>
+                            <p className="font-semibold text-stone-900">{d.name}</p>
+                          </div>
+                          {selected && <Badge className="bg-amber-500 text-white">Выбран</Badge>}
+                        </div>
+                        <p className="text-sm text-stone-600 min-h-[60px]">{d.description}</p>
+                        <ul className="space-y-1.5">
+                          {d.highlights.map((h) => (
+                            <li key={h} className="flex items-start gap-1.5 text-xs text-stone-600">
+                              <Check className="h-3.5 w-3.5 mt-0.5 shrink-0 text-emerald-600" aria-hidden />
+                              {h}
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="grid grid-cols-3 gap-1.5 text-center">
+                          <div className="rounded-md bg-stone-50 p-1.5">
+                            <p className="text-[10px] uppercase text-stone-400">Взнос</p>
+                            <p className="text-xs font-bold tabular-nums text-stone-800">{moneyShort(d.ownerEquity)}</p>
+                          </div>
+                          <div className="rounded-md bg-stone-50 p-1.5">
+                            <p className="text-[10px] uppercase text-stone-400">Ставка</p>
+                            <p className="text-xs font-bold tabular-nums text-stone-800">{(d.loanRate * 100).toFixed(0)}%</p>
+                          </div>
+                          <div className="rounded-md bg-stone-50 p-1.5">
+                            <p className="text-[10px] uppercase text-stone-400">Победа</p>
+                            <p className="text-xs font-bold tabular-nums text-stone-800">{moneyShort(d.winConditions.minCumulativeProfit)}</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {step === 1 && (
             <div className="grid md:grid-cols-2 gap-4">
               {LOCATIONS.map((l) => (
                 <Card
@@ -193,7 +269,7 @@ export function SetupWizard() {
             </div>
           )}
 
-          {step === 1 && (
+          {step === 2 && (
             <div className="grid md:grid-cols-3 gap-4">
               {(Object.keys(PREMISES_SIZES) as PremisesSize[]).map((size) => {
                 const p = PREMISES_SIZES[size];
@@ -231,7 +307,7 @@ export function SetupWizard() {
             </div>
           )}
 
-          {step === 2 && (
+          {step === 3 && (
             <div className="grid md:grid-cols-2 gap-4">
               {(Object.keys(RENOVATION_LEVELS) as RenovationLevel[]).map((lvl) => {
                 const r = RENOVATION_LEVELS[lvl];
@@ -262,7 +338,7 @@ export function SetupWizard() {
             </div>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <div className="space-y-4">
               {(['kitchen', 'coffee', 'hall'] as const).map((zone) => {
                 const labels = { kitchen: 'Кухня (горячий + холодный цех + заготовка)', coffee: 'Кофейная станция', hall: 'Зал и посуда' };
@@ -301,7 +377,7 @@ export function SetupWizard() {
             </div>
           )}
 
-          {step === 4 && (
+          {step === 5 && (
             <div className="grid md:grid-cols-2 gap-4">
               <Card className="border-stone-200">
                 <CardContent className="p-5 space-y-5">
@@ -370,7 +446,7 @@ export function SetupWizard() {
             </div>
           )}
 
-          {step === 5 && (
+          {step === 6 && (
             <div>
               <div className="flex items-center justify-between mb-3">
                 <div>
@@ -421,7 +497,7 @@ export function SetupWizard() {
             </div>
           )}
 
-          {step === 6 && (
+          {step === 7 && (
             <div className="max-w-xl mx-auto space-y-4">
               <Card className="border-stone-200">
                 <CardContent className="p-5 space-y-4">
@@ -436,6 +512,7 @@ export function SetupWizard() {
                     />
                   </div>
                   <div className="rounded-xl bg-stone-50 p-4 space-y-1.5 text-sm">
+                    <Row label="Сложность" value={`${diff.name} · победа с ${moneyShort(diff.winConditions.minCumulativeProfit)} прибыли и рейтингом ${diff.winConditions.minRating}`} />
                     <Row label="Район" value={loc.name} />
                     <Row label="Помещение" value={`${prem.label}: ${prem.seats} мест, ${prem.areaM2} м²`} />
                     <Row label="Ремонт" value={`${RENOVATION_LEVELS[renovation].label} (${moneyShort(costs.renovationCost)})`} />
@@ -473,7 +550,7 @@ export function SetupWizard() {
           <p className="text-xs text-stone-500 hidden sm:block">
             Шаг {step + 1} из {STEPS.length}
           </p>
-          {step < 6 ? (
+          {step < 7 ? (
             <Button
               onClick={() => setStep((s) => s + 1)}
               disabled={!canNext()}

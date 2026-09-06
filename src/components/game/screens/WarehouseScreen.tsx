@@ -17,6 +17,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
+import { CsvReportTools } from '../CsvReportTools';
 import {
   Boxes,
   Wallet,
@@ -175,7 +176,11 @@ export function WarehouseScreen() {
       </SectionCard>
 
       {/* Остатки по категориям */}
-      <SectionCard title="Остатки и закупка" icon={Boxes}>
+      <SectionCard
+        title="Остатки и закупка"
+        icon={Boxes}
+        right={<CsvReportTools />}
+      >
         {rows.length === 0 ? (
           <EmptyState text="Склад пуст — сделайте автозаказ или купите продукты вручную" />
         ) : (

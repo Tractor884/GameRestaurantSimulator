@@ -223,7 +223,7 @@ function scenarioA(): void {
   const monthlyRent = state.restaurant!.rentMonthly;
   const last4Rev = state.history.weekStats.slice(-4).reduce((s, w) => s + w.revenue, 0);
   console.log(`доля аренды: ${pct(monthlyRent / Math.max(1, last4Rev))} (аренда ${fmt(monthlyRent)}/мес к выручке 4 нед)`);
-  console.log(`накопленная чистая прибыль: ${fmt(state.history.cumulativeNetProfit)} ₽ (порог победы 5 млн достигнут на неделе ${state.history.weekStats.findIndex((w) => w.netProfit > 0) >= 0 ? '≈' + Math.ceil(5_000_000 / Math.max(1, state.history.cumulativeNetProfit / 16)) : '?'})`);
+  console.log(`накопленная чистая прибыль: ${fmt(state.history.cumulativeNetProfit)} ₽ (порог победы Стандарта 12 млн — см. difficulty.config.ts; после калибровки 2.0 отражает годовую, а не 7-недельную работу)`);
 }
 
 /* ============================ СЦЕНАРИЙ B ============================ */
