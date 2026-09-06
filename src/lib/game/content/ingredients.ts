@@ -6,12 +6,20 @@
  * shelfLifeDays — срок годности. storage — категория хранения.
  * wastePercent — потери при подготовке (для RecipeCost, ТЗ §13.1).
  *
- * КАЛИБРОВКА FOODCOST: цены подобраны так, чтобы себестоимость типового
- * блюда casual dining давала FoodCost 28–34% при ценах продажи из dishes.ts.
- * Пример: Цезарь с курицей ~27–30%, стейк рибай ~30%, супы ~16–20%,
- * кофе ~10–14% — так и в реальном ресторане.
+ * КАЛИБРОВКА FOODCOST (АУДИТ ПРОЕКТА, 2.0): цены оптового рынка умножаются на
+ * SUPPLIER_MARKUP — реальный ресторан закупает через поставщика с доставкой,
+ * отсрочкой и калиброванным качеством, а не по базарному прайсу. Итоговая
+ * маржа комиссии поставщика закладывается во ВСЕ расчёты (recipeCost,
+ * FIFO-закупки, автозаказ) в одной точке — INGREDIENTS_MAP ниже.
+ * Фактический средневзвешенный FoodCost эталонного меню: 25.6% → ~30%
+ * (целевой диапазон 29–34% из ТЗ §30 / аудита §4.2).
+ * Пример: Цезарь с курицей ~32–34%, стейк рибай ~35%, супы ~21%,
+ * кофе ~13% — так и в реальном ресторане.
  */
 import type { Ingredient } from '../types';
+
+/** Наценка поставщика к оптовому базару: доставка, отсрочка, брак/качество. */
+export const SUPPLIER_MARKUP = 1.18;
 
 const I = (
   id: string,
@@ -21,7 +29,15 @@ const I = (
   shelfLifeDays: number,
   storage: Ingredient['storage'],
   wastePercent: number,
-): Ingredient => ({ id, name, unit, baseCost, shelfLifeDays, storage, wastePercent });
+): Ingredient => ({
+  id,
+  name,
+  unit,
+  baseCost: Math.round(baseCost * SUPPLIER_MARKUP * 100) / 100,
+  shelfLifeDays,
+  storage,
+  wastePercent,
+});
 
 export const INGREDIENTS: Ingredient[] = [
   /* -------- МЯСО И ПТИЦА -------- */

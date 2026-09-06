@@ -24,7 +24,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
-import { Receipt, Users, Star, TrendingUp, BarChart3, Gauge, Percent } from 'lucide-react';
+import { Receipt, Users, TrendingUp, BarChart3, Gauge, Percent } from 'lucide-react';
 
 const TOOLTIP_STYLE = { borderRadius: 8, border: '1px solid #e7e5e4', fontSize: 12 } as const;
 
@@ -33,8 +33,10 @@ export function AnalyticsScreen() {
   const weekStats = state.history.weekStats;
 
   const avgCheck = weekStats.length > 0 ? weekStats.reduce((s, w) => s + w.avgCheck, 0) / weekStats.length : 0;
-  const bestCheck = weekStats.length > 0 ? Math.max(...weekStats.map((w) => w.avgCheck)) : 0;
   const avgRating = weekStats.length > 0 ? weekStats.reduce((s, w) => s + w.rating, 0) / weekStats.length : 0;
+  // АУДИТ №13: явная метрика доли возвратных гостей (зрелый ресторан 15–30%).
+  const retRecent = weekStats.slice(-4);
+  const avgReturning = retRecent.length > 0 ? retRecent.reduce((s, w) => s + w.returningShare, 0) / retRecent.length : 0;
 
   const lineData = useMemo(
     () =>
@@ -83,10 +85,12 @@ export function AnalyticsScreen() {
           tone={avgCheck >= 3500 ? 'good' : 'warn'}
         />
         <KpiCard
-          icon={Star}
-          label="Лучший чек"
-          value={`${Math.round(bestCheck).toLocaleString('ru-RU')} ₽`}
-          sub="макс. за неделю"
+          icon={Users}
+          label="Возвратные гости"
+          value={pct(avgReturning, 0)}
+          sub="доля трафика, 4 нед · норма 15–30%"
+          hint="returningShare"
+          tone={avgReturning >= 0.15 && avgReturning <= 0.35 ? 'good' : avgReturning < 0.15 ? 'warn' : 'warn'}
         />
         <KpiCard
           icon={Users}
@@ -230,6 +234,7 @@ export function AnalyticsScreen() {
                   <TableHead className="text-xs text-right h-9">LC%</TableHead>
                   <TableHead className="text-xs text-right h-9">Прибыль</TableHead>
                   <TableHead className="text-xs text-right h-9">Рейтинг</TableHead>
+                  <TableHead className="text-xs text-right h-9">Возвр.</TableHead>
                   <TableHead className="text-xs text-right h-9">BSC</TableHead>
                 </TableRow>
               </TableHeader>
@@ -269,6 +274,7 @@ export function AnalyticsScreen() {
                       {moneyShort(w.netProfit)}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{w.rating.toFixed(2)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{pct(w.returningShare, 0)}</TableCell>
                     <TableCell className="text-right">
                       <Badge
                         variant="secondary"

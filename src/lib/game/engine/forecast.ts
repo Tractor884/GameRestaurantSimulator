@@ -5,6 +5,8 @@
 import type { ForecastReport, GameState } from '../types';
 import { FORECAST } from '../config/bsc.config';
 import { FINANCE, TAXES } from '../config/finance.config';
+import { hourlyRate } from './staff';
+import { ROLE_IDS } from '../config/staffRoles.config';
 
 export function computeForecast(state: GameState, horizon = FORECAST.horizonWeeks): ForecastReport[] {
   const r = state.restaurant;
@@ -66,16 +68,16 @@ export function computeForecast(state: GameState, horizon = FORECAST.horizonWeek
   return out;
 }
 
-/** Оценка недельного фонда оплаты труда из штата (для прогноза до первой недели). */
+/** Оценка недельного фонда оплаты труда из штата (для прогноза до первой недели).
+ * АУДИТ (§6.2): ставки берутся из staffRoles.config через hourlyRate()
+ * (единый источник) — раньше здесь была собственная таблица ставок, которая
+ * рассинхронизировалась бы при смене окладов. */
 function estimateWeeklyPayroll(r: NonNullable<GameState['restaurant']>): number {
-  const rates: Record<string, number> = {
-    manager: 1078, head_chef: 1018, hot_cook: 689, cold_cook: 569, prep_cook: 449,
-    barista: 479, waiter: 419, hostess: 389, cleaner: 287, dishwasher: 269,
-  };
   let sum = 0;
-  for (const [roleId, pool] of Object.entries(r.staff.pools)) {
-    const hourly = rates[roleId] ?? 400;
-    sum += pool.count * 5 * 8 * hourly * 0.8; // ~80% выход на смены
+  for (const roleId of ROLE_IDS) {
+    const pool = r.staff.pools[roleId];
+    if (!pool) continue;
+    sum += pool.count * 5 * 8 * hourlyRate(roleId) * 0.8; // ~80% выход на смены
   }
   return sum;
 }

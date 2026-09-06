@@ -12,9 +12,9 @@ import type {
 } from '../types';
 import { FINANCE } from '../config/finance.config';
 
-let txCounter = 0;
-
-/** Записать транзакцию и изменить кассу. Единственная точка движения денег. */
+/** Записать транзакцию и изменить кассу. Единственная точка движения денег.
+ * Счётчик id живёт в restaurant.finance (аудит §6.1): module-level счётчик
+ * терялся при загрузке сейва → дубли id после перезапуска. */
 export function addTransaction(
   restaurant: Restaurant,
   date: GameDate,
@@ -23,8 +23,9 @@ export function addTransaction(
   direction: 'in' | 'out',
   description: string,
 ): FinancialTransaction {
+  restaurant.finance.txCounter = (restaurant.finance.txCounter ?? 0) + 1;
   const tx: FinancialTransaction = {
-    id: `tx-${++txCounter}-${date.week}-${date.day}`,
+    id: `tx-${restaurant.finance.txCounter}-${date.week}-${date.day}`,
     date,
     type,
     amount: Math.max(0, Math.round(amount)),

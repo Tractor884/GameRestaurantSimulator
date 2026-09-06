@@ -82,7 +82,12 @@ export const MARKETING_CHANNELS_MAP: Record<string, MarketingChannelConfig> = Ob
   MARKETING_CHANNELS.map((c) => [c.id, c]),
 );
 
-export const MARKETING_LIMITS = { minFactor: 0.8, maxFactor: 2.0 };
+export const MARKETING_LIMITS = {
+  minFactor: 0.8,
+  // АУДИТ: 2.0→1.8. При максимальных бюджетах всех каналов фактор
+  // реально достигает 1.6–1.7; кап 1.8 страхует «включи всё и расти».
+  maxFactor: 1.8,
+};
 
 /** Бюджет клининга: 45 тыс ₽/нед = поддержание чистоты; свыше — рост качества. */
 export const CLEANING = {

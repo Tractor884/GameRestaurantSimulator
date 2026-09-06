@@ -309,7 +309,9 @@ export const useGame = create<GameStore>((set, get) => ({
 }));
 
 /** Миграция сейвов старых версий формата (ТЗ §32.4).
- *  v1 → v2: источник отзывов (sourceId), автозаказ. */
+ *  v1 → v2: источник отзывов (sourceId), автозаказ.
+ *  v2 → v3 (аудит): счётчики id в состоянии; priorReviews 35; weekStats
+ *  старых сейвов без returningShare. */
 function migrateState(state: GameState): void {
   const r = state.restaurant;
   if (!r) return;
@@ -328,6 +330,15 @@ function migrateState(state: GameState): void {
             ? 'social'
             : 'word_of_mouth';
     }
+  }
+  // v3 (аудит §6.1): счётчики id отзывов/транзакций живут в состоянии.
+  if (r.reputation.reviewCounter == null) r.reputation.reviewCounter = 0;
+  if (r.finance.txCounter == null) r.finance.txCounter = r.finance.transactions.length;
+  // v3 (аудит §3.3): усиленный байесовский буфер рейтинга.
+  if ((r.reputation.priorReviews ?? 0) < 45) r.reputation.priorReviews = 45;
+  // v3: недостающие метрики недельной статистики.
+  for (const w of state.history.weekStats) {
+    if (w.returningShare == null) w.returningShare = 0;
   }
 }
 

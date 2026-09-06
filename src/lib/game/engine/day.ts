@@ -26,6 +26,7 @@ import { STAFF_ROLES, ROLE_IDS } from '../config/staffRoles.config';
 import type { RoleId, StationType } from '../types';
 import { cloneState, addTransaction, workingHours, dayIndex, clamp } from './core';
 import { hourlyDemand, emptyReturning } from './demand';
+import { DISHES_MAP, recipeCost } from '../content/dishes';
 import { simulateHour, type QueueEntry } from './hour';
 import { processDeliveries, processEndOfDayLosses, buildAutoOrder, placePurchase } from './inventory';
 import { accruePayrollDay, updateFatigue, averageFatigue, dayCoverage } from './staff';
@@ -124,6 +125,10 @@ export function simulateDay(
     seatedBySegment: { ...emptyReturning() } as Record<SegmentId, number>,
     kitchenOverloadHours: 0,
     staffLoadSum: 0,
+    // ТЕЛЕМЕТРИЯ (аудит): выручка/себестоимость по категориям + возвратный трафик.
+    categoryRevenue: {} as Partial<Record<import('../types').DishCategory, number>>,
+    categoryCogs: {} as Partial<Record<import('../types').DishCategory, number>>,
+    returningGuests: 0,
   };
 
   for (const hour of hours) {
@@ -156,8 +161,21 @@ export function simulateDay(
     totals.satisfactionWeighted += hourResult.satisfaction * hourResult.hourLog.seated;
     totals.satisfactionCount += hourResult.hourLog.seated;
     totals.stopListHits += hourResult.stopListHits;
+    totals.returningGuests += SEGMENT_IDS.reduce(
+      (s, k) => s + (returningHour[k] ?? 0),
+      0,
+    );
     for (const [dishId, count] of Object.entries(hourResult.dishesSold)) {
       totals.dishesSold[dishId] = (totals.dishesSold[dishId] ?? 0) + count;
+      const dish = DISHES_MAP[dishId];
+      if (dish) {
+        const price = restaurant.menu.prices[dishId] ?? dish.recommendedPrice;
+        totals.categoryRevenue[dish.category] =
+          (totals.categoryRevenue[dish.category] ?? 0) + price * count;
+        // Оценка себестоимости по техкарте (≈ FIFO-цена закупки).
+        totals.categoryCogs[dish.category] =
+          (totals.categoryCogs[dish.category] ?? 0) + recipeCost(dish) * count;
+      }
     }
     for (const segId of SEGMENT_IDS) totals.seatedBySegment[segId] += hourResult.seated[segId] ?? 0;
     const maxLoad = Math.max(0, ...Object.values(hourResult.hourLog.stationLoads).map((v) => v ?? 0));
@@ -189,7 +207,7 @@ export function simulateDay(
   restaurant.finance.accrued.payrollGross += payroll;
 
   // ===== 4. КОНЕЦ ДНЯ =====
-  const { wasteCost, expiredCount } = processEndOfDayLosses(restaurant, date);
+  const { wasteCost, expiredCount, nearExpiryCount } = processEndOfDayLosses(restaurant, date);
   updateCleanliness(restaurant, guests);
   updateComfortAtmosphere(restaurant, monthOfDay(dayOfYear(date.week, date.day)));
   updateEquipmentWear(restaurant, totals.kitchenOverloadHours > 0 ? 1.2 : 0.7);
@@ -218,6 +236,7 @@ export function simulateDay(
   const negativeReviews = reviews.filter((r) => r.score <= 2.5).length;
   const riskChanges: RiskChange[] = updateRisks(restaurant, {
     expiredCount,
+    nearExpiryCount,
     lostGuests: totals.lost,
     negativeReviews,
     kitchenOverloadHours: totals.kitchenOverloadHours,
@@ -257,6 +276,13 @@ export function simulateDay(
     payrollAccrued: payroll,
     dishesTop,
     stopListHits: totals.stopListHits,
+    returningGuests: Math.round(totals.returningGuests),
+    categoryRevenue: Object.fromEntries(
+      Object.entries(totals.categoryRevenue).map(([k, v]) => [k, Math.round(v ?? 0)]),
+    ),
+    categoryCogs: Object.fromEntries(
+      Object.entries(totals.categoryCogs).map(([k, v]) => [k, Math.round(v ?? 0)]),
+    ),
   };
 
   // ===== 6. ПРЕДУПРЕЖДЕНИЯ (подсказки ТЗ §31.6) =====

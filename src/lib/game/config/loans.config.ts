@@ -8,9 +8,11 @@ export const LOANS = {
   maxTotalDebt: 20_000_000,
   additionalLoanMinWeek: 12,
   additionalLoanMinDscr: 1.2,
-  overdueFineRate: 0.02, // штраф 2% от платежа за просрочку (раз в неделю)
-  overdueRiskPerWeek: 8, // рост financialRisk за неделю просрочки
-  bankruptcyOverdueWeeks: 8, // просрочка дольше N недель = банкротство
+  // АУДИТ (§4.4): кредит должен давить. Штраф 4% и +10 фин.риска за неделю
+  // просрочки — пропускать платежи стало заметно дороже.
+  overdueFineRate: 0.04,
+  overdueRiskPerWeek: 10,
+  bankruptcyOverdueWeeks: 8,
 };
 
 /** Аннуитетный платёж, ₽. */

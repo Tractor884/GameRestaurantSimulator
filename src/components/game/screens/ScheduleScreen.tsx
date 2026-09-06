@@ -7,14 +7,15 @@
 import { useMemo, useState } from 'react';
 import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, MetricRow, WarningBanner, money, pct } from '../widgets';
-import { STAFF_ROLES, ROLE_IDS } from '@/lib/game/config/staffRoles.config';
+import { STAFF_ROLES, ROLE_IDS, STATIONS } from '@/lib/game/config/staffRoles.config';
 import { hourlyRate, dayCoverage } from '@/lib/game/engine/staff';
 import { DAYS_RU } from '@/lib/game/engine';
+import { HintedLabel } from '../hints';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
-import { CalendarDays, Info } from 'lucide-react';
-import type { RoleId } from '@/lib/game/types';
+import { CalendarDays, Info, Activity } from 'lucide-react';
+import type { RoleId, StationType } from '@/lib/game/types';
 
 export function ScheduleScreen() {
   const state = useGame((s) => s.state)!;
@@ -54,6 +55,29 @@ export function ScheduleScreen() {
     }
     return days;
   }, [staff]);
+
+  // АУДИТ §2.4: загрузка станций за последнюю неделю — видимость
+  // «лишних» и «недостающих» смен. Топ-3 часа станции = устойчивый пик.
+  const stationPeaks = useMemo(() => {
+    const perStation: Record<string, number[]> = {};
+    for (const log of state.history.dayLogs) {
+      for (const h of log.hourLogs) {
+        for (const [st, v] of Object.entries(h.stationLoads)) {
+          if ((v ?? 0) > 0.01) (perStation[st] ??= []).push(v ?? 0);
+        }
+      }
+    }
+    const out: { station: StationType; peak: number; top3: number }[] = [];
+    for (const [st, vals] of Object.entries(perStation)) {
+      const sorted = [...vals].sort((a, b) => b - a);
+      out.push({
+        station: st as StationType,
+        peak: sorted[0] ?? 0,
+        top3: sorted.length > 0 ? sorted.slice(0, 3).reduce((s, v) => s + v, 0) / Math.min(3, sorted.length) : 0,
+      });
+    }
+    return out.sort((a, b) => b.top3 - a.top3);
+  }, [state.history.dayLogs]);
 
   return (
     <div className="space-y-4">
@@ -135,6 +159,59 @@ export function ScheduleScreen() {
             </TableBody>
           </Table>
         </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Загрузка станций (последняя неделя)"
+        icon={Activity}
+        right={
+          <HintedLabel
+            label={<span className="text-xs text-stone-400 whitespace-nowrap">пик · топ-3 часа</span>}
+            hint="stationLoad"
+          />
+        }
+      >
+        {stationPeaks.length === 0 ? (
+          <p className="text-sm text-stone-400">Пока нет данных — сыграйте хотя бы день.</p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {stationPeaks.map((s) => (
+              <div
+                key={s.station}
+                className="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50/60 px-3 py-2"
+              >
+                <span className="text-xs font-medium text-stone-700">{STATIONS[s.station]?.name ?? s.station}</span>
+                <span className="flex items-baseline gap-1">
+                  <span
+                    className={cn(
+                      'text-lg font-bold tabular-nums',
+                      s.top3 > 1.15
+                        ? 'text-red-600'
+                        : s.top3 >= 0.85
+                          ? 'text-emerald-600'
+                          : 'text-stone-400',
+                    )}
+                  >
+                    {(s.top3 * 100).toFixed(0)}%
+                  </span>
+                  <span className="text-[10px] text-stone-400 tabular-nums">макс {(s.peak * 100).toFixed(0)}%</span>
+                </span>
+                <span
+                  className={cn(
+                    'text-[10px] leading-tight',
+                    s.top3 > 1.15
+                      ? 'text-red-500'
+                      : s.top3 >= 0.85
+                        ? 'text-emerald-600'
+                        : 'text-stone-400',
+                  )}
+                >
+                  {s.top3 > 1.15 ? 'не хватает смен/мощности' : s.top3 >= 0.85 ? 'оптимум 85–115%' : 'есть запас — смену можно убрать'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </SectionCard>
 
       <div className="grid md:grid-cols-2 gap-4">

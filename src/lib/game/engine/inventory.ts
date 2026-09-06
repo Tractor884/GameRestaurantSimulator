@@ -151,12 +151,21 @@ export function processDeliveries(restaurant: Restaurant, date: GameDate): numbe
 
 /**
  * Конец дня (ТЗ §12.4): порча, потери хранения, воровство.
- * Возвращает сумму списаний, ₽ (в WasteCost).
+ * Возвращает сумму списаний, ₽ (в WasteCost) + метрики свежести склада
+ * (аудит: «закупки впрок» должны поднимать санитарный риск, а не только
+ * списывать деньги — expiredCount улавливает только полностью умершие
+ * партии, nearExpiryCount — «на грани», их много именно при переполненном
+ * скоропортом складе).
  */
-export function processEndOfDayLosses(restaurant: Restaurant, date: GameDate): { wasteCost: number; expiredCount: number } {
+export function processEndOfDayLosses(
+  restaurant: Restaurant,
+  date: GameDate,
+): { wasteCost: number; expiredCount: number; nearExpiryCount: number } {
   const inv = restaurant.inventory;
   let wasteCost = 0;
   let expiredCount = 0;
+  let nearExpiryCount = 0;
+  const todayIdx = dayIndex(date);
   const surviving: InventoryBatch[] = [];
   for (const batch of inv.batches) {
     // 1. Просроченные партии — полный список.
@@ -165,6 +174,8 @@ export function processEndOfDayLosses(restaurant: Restaurant, date: GameDate): {
       expiredCount++;
       continue;
     }
+    // Близкая экспирация: партия умрёт в ближайшие 2 дня (для сан. риска).
+    if (dayIndex(batch.expiresAt) - todayIdx <= 2) nearExpiryCount++;
     // 2. Естественные потери при хранении.
     const ing = INGREDIENTS_MAP[batch.ingredientId];
     const lossRate = STORAGE_LOSS_PER_DAY[ing?.storage ?? 'dry'];
@@ -180,7 +191,7 @@ export function processEndOfDayLosses(restaurant: Restaurant, date: GameDate): {
     if (batch.quantity > 0.0001) surviving.push(batch);
   }
   inv.batches = surviving;
-  return { wasteCost: Math.round(wasteCost), expiredCount };
+  return { wasteCost: Math.round(wasteCost), expiredCount, nearExpiryCount };
 }
 
 /** Оценка потребности в ингредиентах на N дней (для автозаказа UI).

@@ -50,7 +50,11 @@ export interface SetupOptions {
 
 /** Дефолтный график смен (сбалансированный старт, калиброван по загрузкам станций).
  * ПОКРЫТИЕ ЛАНЧА: утренние смены официантов/поваров усилены под пик 12–15 ч
- * (раньше 2 официанта на 36 посадок/час давали перегруз 1.9× и выгорание). */
+ * (раньше 2 официанта на 36 посадок/час давали перегруз 1.9× и выгорание).
+ * АУДИТ (диагностика): (1) холодный цех был устойчивым узким местом
+ * (топ-3 часа 1.38 при цели 0.85–1.15) — будни утром теперь 3 повара;
+ * (2) воскресенье УТРОМ был 0 хостес — при высоком спросе теряли до 200
+ * гостей/день (посадка = 0 без хостес) — теперь 1. */
 export function defaultSchedule(): Record<RoleId, StaffShifts[]> {
   const mk = (fn: (day: number) => StaffShifts): StaffShifts[] => [0, 1, 2, 3, 4, 5, 6].map(fn);
   return {
@@ -58,13 +62,17 @@ export function defaultSchedule(): Record<RoleId, StaffShifts[]> {
     head_chef: mk((d) => (d === 6 ? { morning: 1, evening: 0 } : { morning: 1, evening: 1 })),
     // Будни: 4 утром (ланч-пик 12–15) + 2 вечером; выходные плотнее.
     hot_cook: mk((d) => (d >= 5 ? { morning: 3, evening: 3 } : { morning: 4, evening: 2 })),
-    // Холодный цех обслуживает холод И десерты — на ланче нужно 2 человека.
-    cold_cook: mk((d) => (d <= 4 ? { morning: 2, evening: 1 } : { morning: 1, evening: 1 })),
+    // Холодный цех обслуживает холод И десерты. Зонд почасовых загрузок:
+    // пики — вечера Сб/Вс (салатно-закусочный ужин), ланч холодом лёгкий.
+    // Будни 2+1, выходные 2+2: ДЕФОРТНЫЙ ГРАФИК НАМЕРЕННО НЕ ОПТИМАЛЕН
+    // (аудит §2.4) — игрок видит загрузку станций на экране «График» и может
+    // высвободить смены. Полная нагрузка вечерних часов ≈ 0.9–1.15.
+    cold_cook: mk((d) => (d >= 5 ? { morning: 2, evening: 2 } : { morning: 2, evening: 1 })),
     prep_cook: mk((d) => (d >= 5 ? { morning: 0, evening: 0 } : { morning: 1, evening: 1 })),
     barista: mk(() => ({ morning: 1, evening: 1 })),
     // 4 официанта утром (ланч-пик), 3–4 вечером (ужин).
     waiter: mk((d) => (d === 4 || d === 5 ? { morning: 4, evening: 4 } : { morning: 4, evening: 3 })),
-    hostess: mk((d) => (d === 6 ? { morning: 0, evening: 1 } : { morning: 1, evening: 1 })),
+    hostess: mk(() => ({ morning: 1, evening: 1 })),
     cleaner: mk(() => ({ morning: 1, evening: 1 })),
     dishwasher: mk(() => ({ morning: 1, evening: 1 })),
   };
@@ -144,12 +152,14 @@ export function createGame(opts: SetupOptions): GameState {
       cash: 0,
       transactions: [],
       loans: loanAmount > 0 ? [loan] : [],
+      txCounter: 0,
       accrued: { payrollGross: 0, taxProfit: 0, rentPaidWeeks: 0 },
     },
     reputation: {
       rating: 3.9,
       priorRating: 3.9,
-      priorReviews: 20,
+      priorReviews: 45,
+      reviewCounter: 0,
       windowReviews: [],
     },
     customerMemory: { cohorts: [] },

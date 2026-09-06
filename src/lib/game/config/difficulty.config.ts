@@ -27,7 +27,7 @@ export const DIFFICULTIES: Record<string, DifficultyConfig> = {
     ownerEquity: 12_000_000,
     maxLoan: 20_000_000,
     loanLimitMultiplier: 1.5,
-    loanRate: 0.22,
+    loanRate: 0.24,
     loanTermMonths: 36,
     demandElasticity: 1.0,
     eventFrequency: 1.0,
@@ -50,12 +50,15 @@ export const HEALTHY_TARGETS = {
   avgCheckNoAlcohol: [3500, 4000] as const,
 };
 
-/** Условия победы на 52-й неделе (ТЗ §37.3). */
+/** Условия победы на 52-й неделе (ТЗ §37.3).
+ * АУДИТ ПРОЕКТА: 5 млн накопленной прибыли достигались за ~7 недель —
+ * победа не отражала годовое управление. Новая планка: 12 млн (≈ 30–40
+ * недель устойчивой работы при целевой марже 10–13%) + касса 4 млн. */
 export const WIN_CONDITIONS = {
-  minCash: 3_000_000,
+  minCash: 4_000_000,
   minBscAvgQuarter: 70,
   minRating: 4.2,
-  minCumulativeProfit: 5_000_000,
+  minCumulativeProfit: 12_000_000,
   minPositiveOpWeeks: 8,
 };
 

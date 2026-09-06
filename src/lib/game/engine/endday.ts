@@ -28,12 +28,12 @@ import { clamp, dayIndex, addTransaction } from './core';
 
 /* ============================= ОТЗЫВЫ И РЕЙТИНГ ============================= */
 
-let reviewCounter = 0;
-
 /**
  * Генерация отзывов за день (ТЗ §16).
  * ReviewProbability = BaseSegmentProbability × SatisfactionModifier × RandomFactor.
- * SatisfactionModifier = 1 + |S − 70| / 50 — крайности отзывчивее.
+ * SatisfactionModifier = 1 + |S − 70| / sensitivity — крайности отзывчивее.
+ * Счётчик id — в restaurant.reputation (аудит §6.1), а не module-level:
+ * после загрузки сейва id не дублируются.
  */
 export function generateReviews(
   restaurant: Restaurant,
@@ -59,8 +59,9 @@ export function generateReviews(
       const srcIdx = rng.int(0, REVIEW_SOURCES.length);
       const sourceId = REVIEW_SOURCES[Math.abs(srcIdx) % REVIEW_SOURCES.length].id as ReviewSourceId;
       const template = pickReviewTemplate(score, rng.int(0, 64));
+      restaurant.reputation.reviewCounter = (restaurant.reputation.reviewCounter ?? 0) + 1;
       reviews.push({
-        id: `rev-${++reviewCounter}-${date.week}-${date.day}`,
+        id: `rev-${restaurant.reputation.reviewCounter}-${date.week}-${date.day}`,
         date: { ...date },
         segmentId: segId,
         score: Math.round(score * 10) / 10,
@@ -210,6 +211,7 @@ export function updateRisks(
   restaurant: Restaurant,
   ctx: {
     expiredCount: number;
+    nearExpiryCount: number;
     lostGuests: number;
     negativeReviews: number;
     kitchenOverloadHours: number;
@@ -227,12 +229,17 @@ export function updateRisks(
   };
 
   // САННИТАРНЫЙ — целевая модель (как у технического и репутационного):
-  // цель отражает текущее положение дел (просрочка дня + грязь), риск тянется
-  // к ней со скоростью 0.25/день. Раньше релаксация была фиксированной (−0.3/день)
-  // и риск после скандала «залипал» около 100 месяцами.
+  // цель отражает текущее положение дел (просрочка дня + грязь + склад
+  // «на грани» — АУДИТ: переполненный скоропортом склад должен повышать
+  // санриск до зон срабатывания проверок/отравлений, а не только списывать
+  // деньги; замер сценария D: риск 9.9 при порче 14.5% выручки), риск
+  // тянется к ней со скоростью 0.25/день.
   {
     const sanTarget = clamp(
-      8 + Math.min(ctx.expiredCount, 10) * 2.5 + Math.max(0, 60 - restaurant.cleanliness) * 1.1,
+      8 +
+        Math.min(ctx.expiredCount, 10) * 2.5 +
+        Math.min(ctx.nearExpiryCount, 15) * 1.6 +
+        Math.max(0, 60 - restaurant.cleanliness) * 1.1,
       0,
       100,
     );
@@ -330,7 +337,13 @@ export function updateRisks(
 
 /**
  * Проверка событий в конце дня (ТЗ §20.3).
- * EventProbability = Base/7 × (Risk/100)^elasticity × difficulty × rng.
+ * ДВА МЕХАНИЗМА (аудит §4.5):
+ *  1. ФОН ВНЕШНЕГО МИРА — backgroundDailyProbability: события случаются и при
+ *     идеальном управлении (проверки, поломки, блогеры, удача). Только шаблоны
+ *     с minRisk ≤ backgroundMaxMinRisk (+позитивные за рейтинг ≥ 4.05):
+ *     «тяжёлые» события (отравление, воровство) требуют плохого управления.
+ *  2. РИСК-ДРАЙВЕН — EventProbability = Base/7 × (Risk/100)^elasticity × difficulty.
+ *     Риски повышают вероятность и открывают тяжёлые шаблоны.
  * Критические события требуют решения игрока (пауза симуляции).
  */
 export function checkEvents(
@@ -342,6 +355,20 @@ export function checkEvents(
   if (date.week < EVENT_CONFIG.minWeek) return [];
   const diff = DIFFICULTIES[state.difficultyId] ?? DIFFICULTIES.standard;
   const events: GameEvent[] = [];
+
+  // 1. Фон внешнего мира: не зависит от рисков игрока.
+  if (rng.chance(EVENT_CONFIG.backgroundDailyProbability * diff.eventFrequency)) {
+    const eligible = EVENT_TEMPLATES.filter((t) => {
+      if (t.criticality === 'positive') return restaurant.reputation.rating >= 4.05;
+      return t.minRisk <= EVENT_CONFIG.backgroundMaxMinRisk;
+    });
+    if (eligible.length > 0) {
+      events.push(instantiateEvent(rng.pick(eligible), date));
+      return events;
+    }
+  }
+
+  // 2. Риск-драйвенная ветка (как раньше).
   for (const template of EVENT_TEMPLATES) {
     const risk = restaurant.risks[template.riskType];
     if (risk < template.minRisk) continue;

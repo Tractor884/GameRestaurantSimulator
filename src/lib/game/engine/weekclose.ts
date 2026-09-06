@@ -54,7 +54,6 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   const revenue = dayResults.reduce((s, r) => s + r.kpi.revenue, 0);
   const cogs = dayResults.reduce((s, r) => s + r.kpi.cogs, 0);
   const wasteCost = dayResults.reduce((s, r) => s + r.kpi.wasteCost, 0);
-  const acquiringFees = Math.round(revenue * FINANCE.acquiringRate);
   const marketing = dayResults.reduce(
     (s, r) => s + (r.transactions.find((t) => t.type === 'marketing')?.amount ?? 0),
     0,
@@ -77,8 +76,12 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     EQUIPMENT_LEVELS[restaurant.equipment.hall.level].maintenanceCostPerWeek * 0.3;
   const otherOperating = FINANCE.otherWeeklyCost + restaurant.marketing.cleaningBudget;
 
-  // P&L (ТЗ §18.4).
-  const grossProfit = revenue - cogs - wasteCost;
+  // P&L (ТЗ §18.4). АУДИТ (§5.1): эквайринг — РАСХОД P&L, раньше комиссия
+  // существовала только в кэше (sale-транзакция = net) и завышала прибыль
+  // на ~2% выручки. Теперь P&L: GrossRevenue → −эквайринг → себестоимость…
+  // (касса при этом двигается на netRevenue — «прибыль ≠ деньги» сохраняется).
+  const acquiringPnl = Math.round(revenue * FINANCE.acquiringRate);
+  const grossProfit = revenue - cogs - wasteCost - acquiringPnl;
   const operatingProfit =
     grossProfit - payroll - socialContributions - rentAccrued - utilitiesAccrued -
     marketing - maintenance - depreciation - licenseAmortization - otherOperating;
@@ -94,7 +97,7 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     revenue, cogs, wasteCost, grossProfit, payroll, socialContributions,
     rentAccrued, utilitiesAccrued, marketing, maintenance, repairs: 0,
     depreciation, licenseAmortization, otherOperating, operatingProfit,
-    loanInterest, taxableProfit, tax, netProfit, acquiringFees,
+    loanInterest, taxableProfit, tax, netProfit, acquiringFees: acquiringPnl,
   };
 
   // ===== ДВИЖЕНИЕ ДЕНЕГ (cash flow) =====
@@ -198,6 +201,7 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
 
   // ===== ИСТОРИЯ =====
   const guests = dayResults.reduce((s, r) => s + r.kpi.guests, 0);
+  const returningGuests = dayResults.reduce((s, r) => s + r.kpi.returningGuests, 0);
   const weekStat: WeekStat = {
     week,
     revenue,
@@ -215,6 +219,7 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     foodCost: revenue > 0 ? (cogs + wasteCost) / revenue : 0,
     laborCost: revenue > 0 ? (payroll + socialContributions) / revenue : 0,
     bsc: bsc.total,
+    returningShare: guests > 0 ? Math.round((returningGuests / guests) * 1000) / 1000 : 0,
   };
   draft.history.weekStats.push(weekStat);
   if (draft.history.weekStats.length > 52) draft.history.weekStats.shift();

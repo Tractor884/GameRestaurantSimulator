@@ -21,7 +21,10 @@ export interface ReputationConfig {
 
 export const REPUTATION_CONFIG: ReputationConfig = {
   priorRating: 3.9,
-  priorReviews: 20,
+  // АУДИТ: 20→45. Байесовский буфер сильнее: один провальный день
+  // (даже с ~20 плохими отзывами) не должен ронять рейтинг больше чем
+  // на 0.3–0.4 пункта. Замер: Δ было −0.61 (prior 20), стало ≈ −0.36.
+  priorReviews: 45,
   ratingFactorTable: [
     [1.0, 0.3],
     [2.0, 0.55],
@@ -35,7 +38,9 @@ export const REPUTATION_CONFIG: ReputationConfig = {
   scandalWeight: 5,
   windowSize: 100,
   reviewNoise: 0.5,
-  satisfactionModifierSensitivity: 50,
+  // АУДИТ: 50→80 — крайние дни генерируют меньше «внезапных» отзывов
+  // (крайности отзывчивее, но не взрываются в 2 раза).
+  satisfactionModifierSensitivity: 80,
 };
 
 /** Линейная интерполяция по кусочной таблице. */

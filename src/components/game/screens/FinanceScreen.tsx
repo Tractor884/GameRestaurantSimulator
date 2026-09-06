@@ -137,9 +137,9 @@ export function FinanceScreen() {
                 <div>
                   <MetricRow label="Выручка (валовая)" value={money(pnl.revenue)} tone="good" />
                   <MetricRow
-                    label="Эквайринг"
+                    label="Эквайринг (2%)"
                     value={money(-pnl.acquiringFees)}
-                    hint="Уже вычтен из чистой выручки"
+                    hint="Комиссия банка за безналичные оплаты: валовая выручка минус эквайринг = чистая выручка, которая приходит в кассу"
                   />
                   <MetricRow label="Себестоимость (COGS, FIFO)" value={money(-pnl.cogs)} />
                   <MetricRow

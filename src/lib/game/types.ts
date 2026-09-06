@@ -269,6 +269,9 @@ export interface ReputationState {
   priorRating: number;
   priorReviews: number;
   windowReviews: Review[]; // последние 100 отзывов
+  /** Счётчик отзывов — В GameState (аудит §6.1): раньше был module-level и
+   * после загрузки сейва id отзывов дублировались. */
+  reviewCounter: number;
 }
 
 export interface ServedCohort {
@@ -330,6 +333,8 @@ export interface FinanceState {
   cash: number; // деньги на счёте, ₽
   transactions: FinancialTransaction[]; // последние ~200
   loans: LoanState[];
+  /** Счётчик транзакций — в GameState (аудит §6.1): уникальность id после загрузки сейва. */
+  txCounter: number;
   /** Накопители для недельного расчёта. */
   accrued: {
     payrollGross: number; // начислено зарплаты за текущую неделю
@@ -417,6 +422,11 @@ export interface DayKPI {
   payrollAccrued: number;
   dishesTop: { dishId: string; count: number }[];
   stopListHits: number; // сколько раз блюдо не смогли продать
+  /** ТЕЛЕМЕТРИЯ (аудит баланса): возвратный трафик дня, до потерь очереди. */
+  returningGuests: number;
+  /** ТЕЛЕМЕТРИЯ: выручка и себестоимость (оценка по техкартам) по категориям блюд. */
+  categoryRevenue: Partial<Record<DishCategory, number>>;
+  categoryCogs: Partial<Record<DishCategory, number>>;
 }
 
 export interface DayLog {
@@ -445,6 +455,8 @@ export interface WeekStat {
   foodCost: number;
   laborCost: number;
   bsc: number;
+  /** Доля возвратных гостей в трафике (аудит: 15–30% для зрелого ресторана). */
+  returningShare: number;
 }
 
 export interface RiskChange {
