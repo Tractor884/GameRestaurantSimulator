@@ -20,6 +20,7 @@ import {
 import { STAFF_ROLES, ROLE_IDS } from '@/lib/game/config/staffRoles.config';
 import { TAXES } from '@/lib/game/config/finance.config';
 import { hourlyRate, dayCoverage } from '@/lib/game/engine/staff';
+import { InfoHint } from '../hints';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -105,6 +106,7 @@ export function StaffScreen() {
           label="Labor Cost"
           value={laborCostPct !== null ? pct(laborCostPct) : '—'}
           sub="цель 25–32% с взносами"
+          hint="laborCost"
           tone={
             laborCostPct === null
               ? 'default'
@@ -120,6 +122,7 @@ export function StaffScreen() {
           label="Средняя мораль"
           value={`${avgMorale.toFixed(0)}/100`}
           sub={avgMorale < 40 ? 'риск увольнений' : 'штат в порядке'}
+          hint="morale"
           tone={avgMorale >= 60 ? 'good' : avgMorale >= 40 ? 'warn' : 'bad'}
         />
       </div>
@@ -163,7 +166,7 @@ export function StaffScreen() {
                     <TableCell>
                       <div className="space-y-2 w-36">
                         <FatigueBar value={pool.fatigue} />
-                        <ScoreBar label="Мораль" value={pool.morale} />
+                        <ScoreBar label="Мораль" value={pool.morale} hint="morale" />
                       </div>
                     </TableCell>
                     <TableCell>
@@ -212,7 +215,7 @@ export function StaffScreen() {
                   0,
                 ),
               )}
-              hint="Смена = 8 часов"
+              hint="Смена = 8 часов. Плотный график без выходных медленно накапливает усталость — следите за полосами выше"
             />
             <MetricRow
               label="ФОТ (gross, оценка/нед)"
@@ -241,13 +244,16 @@ export function StaffScreen() {
   );
 }
 
-/** Полоса усталости: красная > 60, янтарная > 35. */
+/** Полоса усталости: красная > 60, янтарная > 35. С подсказкой как формируется. */
 function FatigueBar({ value }: { value: number }) {
   const color = value > 60 ? 'bg-red-500' : value > 35 ? 'bg-amber-500' : 'bg-emerald-500';
   return (
     <div>
       <div className="flex justify-between text-xs mb-1">
-        <span className="text-stone-500">Усталость</span>
+        <span className="text-stone-500 flex items-center gap-1">
+          Усталость
+          <InfoHint hint="fatigue" />
+        </span>
         <span className={cn('font-semibold tabular-nums', value > 60 ? 'text-red-700' : 'text-stone-800')}>
           {value.toFixed(0)}/100
         </span>

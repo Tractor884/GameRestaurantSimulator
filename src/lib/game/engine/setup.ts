@@ -48,19 +48,22 @@ export interface SetupOptions {
   initialCoverDays?: number;
 }
 
-/** Дефолтный график смен (сбалансированный старт, калиброван по загрузкам станций). */
+/** Дефолтный график смен (сбалансированный старт, калиброван по загрузкам станций).
+ * ПОКРЫТИЕ ЛАНЧА: утренние смены официантов/поваров усилены под пик 12–15 ч
+ * (раньше 2 официанта на 36 посадок/час давали перегруз 1.9× и выгорание). */
 export function defaultSchedule(): Record<RoleId, StaffShifts[]> {
   const mk = (fn: (day: number) => StaffShifts): StaffShifts[] => [0, 1, 2, 3, 4, 5, 6].map(fn);
   return {
     manager: mk(() => ({ morning: 1, evening: 0 })),
     head_chef: mk((d) => (d === 6 ? { morning: 1, evening: 0 } : { morning: 1, evening: 1 })),
-    hot_cook: mk((d) => (d === 5 ? { morning: 3, evening: 3 } : { morning: 2, evening: 2 })),
-    cold_cook: mk(() => ({ morning: 1, evening: 1 })),
+    // Будни: 4 утром (ланч-пик 12–15) + 2 вечером; выходные плотнее.
+    hot_cook: mk((d) => (d >= 5 ? { morning: 3, evening: 3 } : { morning: 4, evening: 2 })),
+    // Холодный цех обслуживает холод И десерты — на ланче нужно 2 человека.
+    cold_cook: mk((d) => (d <= 4 ? { morning: 2, evening: 1 } : { morning: 1, evening: 1 })),
     prep_cook: mk((d) => (d >= 5 ? { morning: 0, evening: 0 } : { morning: 1, evening: 1 })),
     barista: mk(() => ({ morning: 1, evening: 1 })),
-    waiter: mk((d) =>
-      d === 4 || d === 5 ? { morning: 2, evening: 4 } : d === 6 ? { morning: 2, evening: 3 } : { morning: 2, evening: 3 },
-    ),
+    // 4 официанта утром (ланч-пик), 3–4 вечером (ужин).
+    waiter: mk((d) => (d === 4 || d === 5 ? { morning: 4, evening: 4 } : { morning: 4, evening: 3 })),
     hostess: mk((d) => (d === 6 ? { morning: 0, evening: 1 } : { morning: 1, evening: 1 })),
     cleaner: mk(() => ({ morning: 1, evening: 1 })),
     dishwasher: mk(() => ({ morning: 1, evening: 1 })),

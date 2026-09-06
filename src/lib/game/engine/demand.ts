@@ -69,15 +69,28 @@ export function estimatedCheck(restaurant: Restaurant, segmentId: SegmentId): nu
   return sum;
 }
 
-/** MarketingFactor(segment) = clamp(1 + Σ(ChannelLift × Affinity), 0.8, 2.0). */
-export function marketingFactor(restaurant: Restaurant, segmentId: SegmentId): number {
+/**
+ * MarketingFactor(segment) = clamp(1 + Σ(ChannelLift × Affinity), 0.8, 2.0).
+ *
+ * ЗАВЕРШЁННЫЕ КАМПАНИИ (ТЗ §21.6 «пост-эффект»): после окончания срока кампания
+ * перестаёт стоить денег, но спрос падает не мгновенно — люди уже запомнили
+ * ресторан. Остаточный лифт затухает вдвое каждую неделю (0.5^нед) и обнуляется
+ * через 2 недели — «инерция узнаваемости». Это делает паузы между кампаниями
+ * мягкими и объяснимыми: сразу после остановки спрос держится, затем сползает.
+ */
+export function marketingFactor(restaurant: Restaurant, segmentId: SegmentId, nowWeek = 0): number {
   let lift = 0;
   for (const c of restaurant.marketing.campaigns) {
     const channel = MARKETING_CHANNELS_MAP[c.channelId];
     if (!channel) continue;
     const dailySpend = c.weeklyBudget / 7;
     const channelLift = channel.maxLift * (1 - Math.exp(-dailySpend / channel.scale));
-    lift += channelLift * (channel.affinity[segmentId] ?? 0.3);
+    let residual = 1;
+    if (c.endedWeek != null) {
+      // Недель с момента завершения: 0 → полный эффект, далее −50%/нед.
+      residual = Math.pow(0.5, Math.max(0, nowWeek - c.endedWeek));
+    }
+    lift += channelLift * (channel.affinity[segmentId] ?? 0.3) * residual;
   }
   return Math.max(MARKETING_LIMITS.minFactor, Math.min(MARKETING_LIMITS.maxFactor, 1 + lift));
 }
@@ -175,7 +188,7 @@ export function hourlyDemand(
     const gap = seg.budget > 0 ? est / seg.budget - 1 : 0;
     const pricePerception = Math.max(0.3, Math.min(1.5, 1 - seg.priceSensitivity * diff.demandElasticity * gap));
     const pq = pricePerception * quality;
-    const mf = marketingFactor(restaurant, segId);
+    const mf = marketingFactor(restaurant, segId, date.week);
     const rand = rng.float(RANDOM_FACTOR_RANGE[0], RANDOM_FACTOR_RANGE[1]);
     newDemand[segId] = Math.max(0, base * share * pq * mf * rand);
   }

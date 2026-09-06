@@ -210,6 +210,10 @@ export interface MarketingCampaign {
   weeklyBudget: number; // ₽/нед
   startWeek: number;
   durationWeeks: number;
+  /** Неделя, когда кампания завершилась (задаётся движком при исчерпании срока).
+   *  undefined = кампания ещё идёт и списывает бюджет.
+   *  После завершения эффект затухает ~2 недели («послесвечение»), затем кампания удаляется. */
+  endedWeek?: number;
 }
 
 export interface MarketingState {
@@ -254,7 +258,11 @@ export interface Review {
   weight: number; // вес (скандальные ×3..×10)
   text: string;
   scandal: boolean;
+  /** Источник отзыва (Карты / Агрегатор / Соцсети / Сарафан) — для фильтра на экране отзывов. */
+  sourceId?: ReviewSourceId;
 }
+
+export type ReviewSourceId = 'maps' | 'aggregator' | 'social' | 'word_of_mouth';
 
 export interface ReputationState {
   rating: number; // эффективный рейтинг 1..5 (Байес)

@@ -7,6 +7,7 @@
 import { useMemo } from 'react';
 import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, EmptyState } from '../widgets';
+import { InfoHint } from '../hints';
 import { RISKS_META, EVENT_CONFIG } from '@/lib/game/config/risks.config';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -93,7 +94,7 @@ export function EventsScreen() {
             const meta = RISKS_META[rt];
             return (
               <div key={rt}>
-                <RiskBar label={meta.name} value={value} />
+                <RiskBar label={meta.name} value={value} hint={`risk${rt.charAt(0).toUpperCase()}${rt.slice(1)}`} />
                 <div className="mt-1 flex flex-col gap-0.5">
                   <p className="text-[10px] text-stone-400 leading-snug">
                     <span className="text-red-500">Растёт:</span> {meta.driversUp.join(', ')}
@@ -226,12 +227,20 @@ function CriticalityBadge({ criticality }: { criticality: GameEvent['criticality
 }
 
 /** Полоса риска: высокое значение — плохо (инверсия цветов ScoreBar). */
-function RiskBar({ label, value }: { label: string; value: number }) {
+function RiskBar({ label, value, hint }: { label: string; value: number; hint?: string }) {
   const color = value >= 60 ? 'bg-red-500' : value >= 35 ? 'bg-amber-500' : 'bg-emerald-500';
+  const hintKey =
+    hint === 'riskSanitary' || hint === 'riskTechnical' || hint === 'riskStaff' ||
+    hint === 'riskReputation' || hint === 'riskLegal' || hint === 'riskFinancial'
+      ? hint
+      : undefined;
   return (
     <div>
       <div className="flex justify-between text-xs mb-1">
-        <span className={cn('font-medium', value >= 60 ? 'text-red-700' : 'text-stone-600')}>{label}</span>
+        <span className={cn('font-medium flex items-center gap-1', value >= 60 ? 'text-red-700' : 'text-stone-600')}>
+          {label}
+          {hintKey && <InfoHint hint={hintKey} />}
+        </span>
         <span
           className={cn(
             'font-semibold tabular-nums',

@@ -1,18 +1,31 @@
 /**
- * Экран «Отзывы» (ТЗ §21): рейтинг, окно последних отзывов,
- * скандальные отзывы, сегменты гостей.
+ * Экран «Отзывы» (ТЗ §21): рейтинг, окно последних отзывов, скандальные отзывы,
+ * сегменты гостей + ФИЛЬТРЫ: по баллам (1–5), по группам ЦА, по источнику.
  */
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, KpiCard, EmptyState } from '../widgets';
-import { SEGMENTS } from '@/lib/game/config/segments.config';
+import { InfoHint } from '../hints';
+import { SEGMENTS, SEGMENT_IDS } from '@/lib/game/config/segments.config';
+import { REVIEW_SOURCES, REVIEW_SOURCES_MAP } from '@/lib/game/config/reviews.config';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { Star, MessageSquare, Flame, ThumbsUp } from 'lucide-react';
-import type { Review } from '@/lib/game/types';
+import { Star, MessageSquare, Flame, ThumbsUp, Filter, MapPin, Megaphone } from 'lucide-react';
+import type { Review, ReviewSourceId, SegmentId } from '@/lib/game/types';
+
+const ALL = 'all';
 
 export function ReviewsScreen() {
   const state = useGame((s) => s.state)!;
@@ -21,10 +34,33 @@ export function ReviewsScreen() {
   const rep = restaurant.reputation;
   const reviews = rep.windowReviews;
 
-  const recent = useMemo(() => reviews.slice(-40).reverse(), [reviews]);
+  // ===== ФИЛЬТРЫ =====
+  const [scoreFilter, setScoreFilter] = useState<string[]>([]);
+  const [segmentFilter, setSegmentFilter] = useState<string>(ALL);
+  const [sourceFilter, setSourceFilter] = useState<string>(ALL);
+
+  const filtered = useMemo(() => {
+    return reviews.filter((r) => {
+      if (scoreFilter.length > 0 && !scoreFilter.includes(String(scoreBucket(r)))) return false;
+      if (segmentFilter !== ALL && r.segmentId !== segmentFilter) return false;
+      if (sourceFilter !== ALL && (r.sourceId ?? 'word_of_mouth') !== sourceFilter) return false;
+      return true;
+    });
+  }, [reviews, scoreFilter, segmentFilter, sourceFilter]);
+
+  const anyFilter = scoreFilter.length > 0 || segmentFilter !== ALL || sourceFilter !== ALL;
+  const recent = useMemo(() => filtered.slice(-80).reverse(), [filtered]);
 
   const windowAvg = reviews.length > 0 ? reviews.reduce((s, r) => s + r.score, 0) / reviews.length : 0;
   const scandals = reviews.filter((r) => r.scandal || r.weight > 1).length;
+
+  // Распределение по баллам (для гистограммы).
+  const dist = useMemo(() => {
+    const buckets = [0, 0, 0, 0, 0];
+    for (const r of reviews) buckets[Math.min(4, Math.max(0, scoreBucket(r) - 1))]++;
+    return buckets;
+  }, [reviews]);
+  const distMax = Math.max(1, ...dist);
 
   return (
     <div className="space-y-4">
@@ -35,6 +71,7 @@ export function ReviewsScreen() {
           value={rep.rating.toFixed(2)}
           sub="Байесовская оценка"
           tone={rep.rating >= 4.2 ? 'good' : rep.rating >= 3.8 ? 'warn' : 'bad'}
+          hint="rating"
         />
         <KpiCard
           icon={MessageSquare}
@@ -48,6 +85,7 @@ export function ReviewsScreen() {
           value={reviews.length > 0 ? windowAvg.toFixed(1) : '—'}
           sub="по 5-балльной шкале"
           tone={windowAvg >= 4 ? 'good' : windowAvg >= 3 ? 'warn' : 'bad'}
+          hint="rating"
         />
         <KpiCard
           icon={Flame}
@@ -55,12 +93,146 @@ export function ReviewsScreen() {
           value={String(scandals)}
           sub="вес ×3…×10 к рейтингу"
           tone={scandals > 0 ? 'bad' : 'good'}
+          hint="riskReputation"
         />
       </div>
 
+      {/* Распределение оценок + фильтры */}
+      <SectionCard title="Оценки и фильтры" icon={Filter}>
+        <div className="space-y-4">
+          {/* Гистограмма распределения */}
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-stone-400 mb-2">
+              Распределение оценок в окне
+            </p>
+            <div className="flex items-end gap-2 h-20">
+              {dist.map((count, i) => {
+                const score = i + 1;
+                const active = scoreFilter.length === 0 || scoreFilter.includes(String(score));
+                return (
+                  <button
+                    key={score}
+                    onClick={() => toggleScore(score, scoreFilter, setScoreFilter)}
+                    className="flex-1 flex flex-col items-center gap-1 group"
+                    aria-label={`Фильтр: ${score} ${score === 1 ? 'балл' : score < 5 ? 'балла' : 'баллов'} (${count} отзывов)`}
+                    aria-pressed={scoreFilter.includes(String(score))}
+                  >
+                    <span className={cn('text-xs tabular-nums font-semibold', active ? 'text-stone-700' : 'text-stone-300')}>
+                      {count}
+                    </span>
+                    <div
+                      className={cn(
+                        'w-full rounded-t-md transition-all',
+                        score >= 4 ? 'bg-emerald-400' : score === 3 ? 'bg-amber-400' : 'bg-red-400',
+                        !active && 'opacity-30',
+                        scoreFilter.includes(String(score)) && 'ring-2 ring-offset-1 ring-amber-500',
+                      )}
+                      style={{ height: `${Math.max(6, (count / distMax) * 56)}px` }}
+                    />
+                    <span className={cn('text-xs tabular-nums', active ? 'text-stone-600' : 'text-stone-300')}>
+                      {score}★
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Фильтры по баллам */}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 min-w-[200px]">
+              <span className="text-sm text-stone-600">Баллы:</span>
+              <ToggleGroup
+                type="multiple"
+                variant="outline"
+                value={scoreFilter}
+                onValueChange={(v) => setScoreFilter(v)}
+                aria-label="Фильтр по баллам"
+              >
+                {[1, 2, 3, 4, 5].map((s) => (
+                  <ToggleGroupItem
+                    key={s}
+                    value={String(s)}
+                    aria-label={`${s} баллов`}
+                    className="h-9 px-3 data-[state=on]:bg-amber-100 data-[state=on]:text-amber-900"
+                  >
+                    {s}★
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            </div>
+
+            <div className="flex items-center gap-2 flex-1 min-w-[220px]">
+              <span className="text-sm text-stone-600 whitespace-nowrap">Группа ЦА:</span>
+              <Select value={segmentFilter} onValueChange={setSegmentFilter}>
+                <SelectTrigger className="w-full max-w-[220px] h-9" aria-label="Фильтр по сегменту">
+                  <SelectValue placeholder="Все сегменты" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>Все сегменты</SelectItem>
+                  {SEGMENT_IDS.map((id) => (
+                    <SelectItem key={id} value={id}>
+                      {SEGMENTS[id].name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+              <span className="text-sm text-stone-600 whitespace-nowrap">Источник:</span>
+              <Select value={sourceFilter} onValueChange={setSourceFilter}>
+                <SelectTrigger className="w-full max-w-[190px] h-9" aria-label="Фильтр по источнику">
+                  <SelectValue placeholder="Все источники" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>Все источники</SelectItem>
+                  {REVIEW_SOURCES.map((src) => (
+                    <SelectItem key={src.id} value={src.id}>
+                      {src.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {anyFilter && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 text-stone-500"
+                onClick={() => {
+                  setScoreFilter([]);
+                  setSegmentFilter(ALL);
+                  setSourceFilter(ALL);
+                }}
+              >
+                Сбросить
+              </Button>
+            )}
+          </div>
+
+          <p className="text-xs text-stone-500">
+            {anyFilter ? (
+              <>
+                Найдено <b className="text-stone-800 tabular-nums">{filtered.length}</b> из{' '}
+                {reviews.length} отзывов
+              </>
+            ) : (
+              <>
+                Подсказка: клик по столбцу гистограммы или фильтры выше — чтобы разобрать
+                негатив по группам гостей и источникам.
+              </>
+            )}
+          </p>
+        </div>
+      </SectionCard>
+
       <SectionCard title="Лента отзывов (новые сверху)" icon={MessageSquare}>
         {recent.length === 0 ? (
-          <EmptyState text="Отзывов ещё нет — запустите дни симуляции, гости оценят сервис" />
+          <EmptyState
+            text={anyFilter ? 'Под фильтры ничего не попало — ослабьте условия' : 'Отзывов ещё нет — запустите дни симуляции, гости оценят сервис'}
+          />
         ) : (
           <ScrollArea className="max-h-[420px] pr-3">
             <div className="space-y-2">
@@ -75,10 +247,23 @@ export function ReviewsScreen() {
   );
 }
 
+/** Клик по столбцу гистограммы — переключение фильтра баллов. */
+function toggleScore(score: number, current: string[], set: (v: string[]) => void) {
+  const key = String(score);
+  set(current.includes(key) ? current.filter((k) => k !== key) : [...current, key]);
+}
+
+/** Ведро оценки: 4.7 → «5», 3.2 → «3». */
+function scoreBucket(r: Review): number {
+  return Math.max(1, Math.min(5, Math.round(r.score)));
+}
+
 /** Карточка одного отзыва. */
 function ReviewRow({ review }: { review: Review }) {
   const isScandal = review.scandal || review.weight > 1;
-  const segName = SEGMENTS[review.segmentId]?.name ?? review.segmentId;
+  const segName = SEGMENTS[review.segmentId as SegmentId]?.name ?? review.segmentId;
+  const sourceId = (review.sourceId ?? 'word_of_mouth') as ReviewSourceId;
+  const sourceName = REVIEW_SOURCES_MAP[sourceId] ?? 'Сарафан';
 
   return (
     <div
@@ -95,8 +280,23 @@ function ReviewRow({ review }: { review: Review }) {
             Скандальный (вес ×{review.weight.toFixed(0)})
           </Badge>
         )}
-        <Badge variant="secondary" className="bg-stone-100 text-stone-600">
+        <Badge variant="secondary" className="bg-stone-100 text-stone-600 hover:bg-stone-100">
           {segName}
+        </Badge>
+        <Badge variant="secondary" className="bg-amber-50 text-amber-800 hover:bg-amber-50 border border-amber-200">
+          {sourceId === 'maps' ? (
+            <MapPin className="h-3 w-3 mr-1" aria-hidden />
+          ) : (
+            <Megaphone className="h-3 w-3 mr-1" aria-hidden />
+          )}
+          {sourceName}
+          <InfoHint
+            hint={{
+              title: `Источник: ${sourceName}`,
+              body: `${REVIEW_SOURCES.find((s) => s.id === sourceId)?.hint ?? ''} Источник виден в фильтрах — так вы понимаете, откуда приходит негатив и хвала.`,
+            }}
+            className="h-4 w-4"
+          />
         </Badge>
         <span className="ml-auto text-xs text-stone-400 tabular-nums">
           Нед {review.date.week} · День {review.date.day + 1}

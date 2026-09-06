@@ -4,14 +4,13 @@
  */
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { useGame, type ScreenId } from '@/lib/game/store/gameStore';
 import { EVENT_TEMPLATES_MAP } from '@/lib/game/config/risks.config';
-import { STATUS_LABELS } from '@/lib/game/config/difficulty.config';
 import { moneyShort, money } from './widgets';
 import { cn } from '@/lib/utils';
 import {
@@ -53,6 +52,7 @@ import { EquipmentScreen } from './screens/EquipmentScreen';
 import { LoansScreen } from './screens/LoansScreen';
 import { QuarterlyScreen } from './screens/QuarterlyScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { GameOverDialog, FinalStatusBadge } from './GameOverDialog';
 
 const NAV: { group: string; items: { id: ScreenId; label: string; icon: typeof Utensils }[] }[] = [
   {
@@ -128,15 +128,6 @@ export function GameShell() {
 
   const weekDayLabel = state ? `Неделя ${state.week} · ${DAYS_RU[state.day]}` : '';
 
-  const gameoverNote = useMemo(() => {
-    if (state?.phase !== 'gameover') return null;
-    const fs = state.weekResult?.finalScore;
-    return {
-      status: STATUS_LABELS[state.status],
-      score: fs?.total ?? null,
-    };
-  }, [state]);
-
   if (!state || !restaurant) return null;
 
   return (
@@ -193,10 +184,7 @@ export function GameShell() {
                 Требуется решение
               </Badge>
             ) : state.phase === 'gameover' ? (
-              <Badge variant="secondary" className="bg-stone-800 text-white">
-                {gameoverNote?.status}
-                {gameoverNote?.score != null ? ` · ${gameoverNote.score}/1000` : ''}
-              </Badge>
+              <FinalStatusBadge />
             ) : (
               <>
                 <Button
@@ -295,39 +283,50 @@ export function GameShell() {
 
       {/* Диалог критического события (ТЗ §20.4) */}
       <Dialog open={!!pendingCritical} onOpenChange={() => undefined}>
-        <DialogContent className="max-w-lg">
-          {pendingCritical && (
-            <>
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2 text-red-800">
+        <DialogContent className="max-w-lg" aria-describedby="critical-desc">
+          {/* Постоянные заголовок/описание для доступности (Radix требует DialogTitle). */}
+          <DialogHeader className={pendingCritical ? undefined : 'sr-only'}>
+            <DialogTitle className="flex items-center gap-2 text-red-800">
+              {pendingCritical ? (
+                <>
                   <AlertTriangle className="h-5 w-5 text-red-600" aria-hidden />
                   {pendingCritical.title}
-                </DialogTitle>
-                <DialogDescription>{pendingCritical.description}</DialogDescription>
-              </DialogHeader>
-              <div className="space-y-2">
-                {EVENT_TEMPLATES_MAP[pendingCritical.templateId]?.resolutions?.map((res, i) => (
-                  <button
-                    key={i}
-                    onClick={() => resolveCritical(pendingCritical.id, i)}
-                    className="w-full rounded-lg border border-stone-200 p-3 text-left hover:border-amber-400 hover:bg-amber-50 transition-colors"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium text-stone-800">{res.label}</span>
-                      {res.cost > 0 && (
-                        <Badge variant="secondary" className="bg-stone-100 tabular-nums">
-                          {money(res.cost)}
-                        </Badge>
-                      )}
-                    </div>
-                    <p className="text-xs text-stone-500 mt-1">{res.note}</p>
-                  </button>
-                ))}
-              </div>
-            </>
+                </>
+              ) : (
+                'Событие'
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              {pendingCritical?.description ?? 'Критическое событие требует решения.'}
+              <span id="critical-desc" className="sr-only">Выберите вариант реакции</span>
+            </DialogDescription>
+          </DialogHeader>
+          {pendingCritical && (
+            <div className="space-y-2">
+              {EVENT_TEMPLATES_MAP[pendingCritical.templateId]?.resolutions?.map((res, i) => (
+                <button
+                  key={i}
+                  onClick={() => resolveCritical(pendingCritical.id, i)}
+                  className="w-full rounded-lg border border-stone-200 p-3 text-left hover:border-amber-400 hover:bg-amber-50 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-stone-800">{res.label}</span>
+                    {res.cost > 0 && (
+                      <Badge variant="secondary" className="bg-stone-100 tabular-nums">
+                        {money(res.cost)}
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-stone-500 mt-1">{res.note}</p>
+                </button>
+              ))}
+            </div>
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Финальный экран: счёт и статус НЕ исчезают сами — пользователь закрывает сам */}
+      <GameOverDialog />
     </div>
   );
 }

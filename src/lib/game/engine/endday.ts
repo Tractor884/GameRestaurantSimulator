@@ -11,11 +11,12 @@ import type {
   RiskChange,
   RiskType,
   SegmentId,
+  ReviewSourceId,
 } from '../types';
 import { SEGMENTS, SEGMENT_IDS } from '../config/segments.config';
 import { REPUTATION_CONFIG } from '../config/reputation.config';
 import { RETURNS_CONFIG } from '../config/returns.config';
-import { REVIEW_CHANNELS } from '../config/reviews.config';
+import { REVIEW_CHANNELS, REVIEW_SOURCES, REVIEW_SOURCES_MAP, pickReviewTemplate } from '../config/reviews.config';
 import { EVENT_CONFIG, EVENT_TEMPLATES, type EventTemplate } from '../config/risks.config';
 import { DIFFICULTIES } from '../config/difficulty.config';
 import { CLEANING } from '../config/marketing.config';
@@ -24,7 +25,6 @@ import { MARKETING_CHANNELS_MAP } from '../config/marketing.config';
 import { RISK_LIMITS } from '../config/risks.config';
 import type { Rng } from '../rng';
 import { clamp, dayIndex, addTransaction } from './core';
-import { SEGMENTS as SEGS } from '../config/segments.config';
 
 /* ============================= ОТЗЫВЫ И РЕЙТИНГ ============================= */
 
@@ -56,25 +56,39 @@ export function generateReviews(
       const noise = rng.float(-REPUTATION_CONFIG.reviewNoise, REPUTATION_CONFIG.reviewNoise);
       const score = clamp(satisfaction / 20 + noise, 1, 5);
       const scandal = satisfaction < 45 && rng.chance(0.06);
+      const srcIdx = rng.int(0, REVIEW_SOURCES.length);
+      const sourceId = REVIEW_SOURCES[Math.abs(srcIdx) % REVIEW_SOURCES.length].id as ReviewSourceId;
+      const template = pickReviewTemplate(score, rng.int(0, 64));
       reviews.push({
         id: `rev-${++reviewCounter}-${date.week}-${date.day}`,
         date: { ...date },
         segmentId: segId,
         score: Math.round(score * 10) / 10,
         weight: scandal ? REPUTATION_CONFIG.scandalWeight : 1,
+        // Живой текст: шаблон по диапазону оценки + сегментная окраска + площадка.
         text: scandal
-          ? 'Отвратительный опыт: ждали, ошиблись с заказом, никто не извинился. Расскажу всем!'
-          : `«${segmentText(segId, score)}» — ${REVIEW_CHANNELS[rng.int(0, REVIEW_CHANNELS.length)]}`,
+          ? `${template.text} ${segmentFlavor(segId)} — ${REVIEW_SOURCES_MAP[sourceId]}.`
+          : `${template.text} ${segmentFlavor(segId)} — ${REVIEW_CHANNELS[Math.abs(srcIdx) % REVIEW_CHANNELS.length]}.`,
         scandal,
+        sourceId,
       });
     }
   }
   return reviews;
 }
 
-function segmentText(segId: SegmentId, score: number): string {
-  const base = SEGS[segId].name;
-  return score >= 4 ? `${base}: остались довольны` : score >= 3 ? `${base}: средние впечатления` : `${base}: недовольны`;
+function segmentFlavor(segId: SegmentId): string {
+  const map: Record<SegmentId, string> = {
+    breakfast: 'Завтракал у вас.',
+    business_lunch: 'Обедал по бизнес-ланчу.',
+    office_evening: 'Заглянули с коллегами после работы.',
+    family: 'Были всей семьёй.',
+    youth: 'Тусовались вечером.',
+    tourist: 'Гости города, забрели по рекомендации.',
+    premium: 'Ужин делового уровня.',
+    evening: 'Ужинали вечером.',
+  };
+  return map[segId];
 }
 
 /**
@@ -118,7 +132,8 @@ export function createCohorts(
   seatedBySegment: Record<SegmentId, number>,
   satisfaction: number,
 ): void {
-  const loyaltyActive = restaurant.marketing.campaigns.some((c) => c.channelId === 'loyalty');
+  // Лояльность работает только от АКТИВНЫХ кампаний (завершённые затухают).
+  const loyaltyActive = restaurant.marketing.campaigns.some((c) => c.channelId === 'loyalty' && c.endedWeek == null);
   const loyaltyFactor = loyaltyActive
     ? Math.min(RETURNS_CONFIG.marketingLoyaltyFactorMax, 1.15)
     : 1;
@@ -211,8 +226,28 @@ export function updateRisks(
     if (Math.abs(real) >= 0.5) changes.push({ riskType, delta: Math.round(real * 10) / 10, reason });
   };
 
-  // Санитарный: просрочка (с насыщением — 1 партия ≠ катастрофа), грязь, ошибки.
-  push('sanitary', Math.min(ctx.expiredCount, 10) * 0.6 + Math.max(0, 60 - restaurant.cleanliness) / 15 - RISK_LIMITS.dailyRelax, 'просрочка и чистота');
+  // САННИТАРНЫЙ — целевая модель (как у технического и репутационного):
+  // цель отражает текущее положение дел (просрочка дня + грязь), риск тянется
+  // к ней со скоростью 0.25/день. Раньше релаксация была фиксированной (−0.3/день)
+  // и риск после скандала «залипал» около 100 месяцами.
+  {
+    const sanTarget = clamp(
+      8 + Math.min(ctx.expiredCount, 10) * 2.5 + Math.max(0, 60 - restaurant.cleanliness) * 1.1,
+      0,
+      100,
+    );
+    const old = restaurant.risks.sanitary;
+    const v = clamp(old + (sanTarget - old) * 0.25, RISK_LIMITS.min, RISK_LIMITS.max);
+    restaurant.risks.sanitary = v;
+    const real = v - old;
+    if (Math.abs(real) >= 0.5) {
+      changes.push({
+        riskType: 'sanitary',
+        delta: Math.round(real * 10) / 10,
+        reason: real >= 0 ? 'просрочка и чистота' : 'чистота и контроль сроков',
+      });
+    }
+  }
   // Технический риск отслеживает УРОВЕНЬ износа (не копит его): target = износ.
   const avgWear = (restaurant.equipment.kitchen.wear + restaurant.equipment.coffee.wear) / 2;
   const techTarget = Math.min(95, avgWear * 0.9 + ctx.kitchenOverloadHours * 2.5);
@@ -223,14 +258,67 @@ export function updateRisks(
     const real = v - old;
     if (Math.abs(real) >= 0.5) changes.push({ riskType: 'technical', delta: Math.round(real * 10) / 10, reason: 'износ оборудования' });
   }
-  // Кадровый: перегрузка и мораль.
-  const avgMorale = SEGMENT_IDS.length > 0
-    ? Object.values(restaurant.staff.pools).reduce((s, p) => s + p.morale * p.count, 0) /
-      Math.max(1, Object.values(restaurant.staff.pools).reduce((s, p) => s + p.count, 0))
-    : 70;
-  push('staff', Math.max(0, ctx.avgStaffLoad - 1.05) * 5 + Math.max(0, 45 - avgMorale) / 15 - RISK_LIMITS.dailyRelax, 'нагрузка и мораль');
-  // Репутационный: ушедшие гости и негатив.
-  push('reputation', ctx.lostGuests * 0.03 + ctx.negativeReviews * 1.0 - RISK_LIMITS.dailyRelax - 0.15, 'очередь и отзывы');
+  // КАДРОВЫЙ — целевая модель: цель = перегрузка дня + мораль + усталость.
+  // Медленный дрейф −0.3/день заменён движением к цели (0.2/день), иначе
+  // кадровый риск после волны увольнений «залипал» у 100.
+  {
+    const pools = Object.values(restaurant.staff.pools);
+    const people = pools.reduce((s, p) => s + p.count, 0);
+    const avgMorale = people > 0 ? pools.reduce((s, p) => s + p.morale * p.count, 0) / people : 70;
+    const avgFatigue = people > 0 ? pools.reduce((s, p) => s + p.fatigue * p.count, 0) / people : 0;
+    const staffTarget = clamp(
+      8 +
+        Math.max(0, ctx.avgStaffLoad - 1.05) * 25 +
+        Math.max(0, 45 - avgMorale) * 1.4 +
+        Math.max(0, avgFatigue - 50) * 0.8,
+      0,
+      100,
+    );
+    const old = restaurant.risks.staff;
+    const v = clamp(old + (staffTarget - old) * 0.2, RISK_LIMITS.min, RISK_LIMITS.max);
+    restaurant.risks.staff = v;
+    const real = v - old;
+    if (Math.abs(real) >= 0.5) {
+      changes.push({
+        riskType: 'staff',
+        delta: Math.round(real * 10) / 10,
+        reason: real >= 0 ? 'нагрузка и мораль' : 'график и мораль стабилизируются',
+      });
+    }
+  }
+  // РЕПУТАЦИОННЫЙ РИСК — целевая модель (исправление «застревания на 100»).
+  // Раньше: риск только рос от ушедших гостей и негатива, а падал на фиксированные
+  // 0.45/день — при 100 подъём вверх доминировал всегда, риск месяцами не снижался.
+  // Теперь риск тянется к «цели», отражающей текущее положение дел:
+  //   база 12 (фон недовольства всегда есть)
+  //   + ушедшие из очереди гости и негативные отзывы дня
+  //   + низкий рейтинг (держит цель высокой, пока репутация не восстановлена)
+  //   + скандальные отзывы в окне.
+  // Скорость 0.25/день: восстановление со 100 до ~20 занимает ~2 недели стабильного
+  // хорошего сервиса — наказание за скандал остаётся ощутимым, но обратимым.
+  {
+    const scandals = restaurant.reputation.windowReviews.filter((r) => r.scandal).length;
+    const repTarget = clamp(
+      12 +
+        ctx.lostGuests * 0.55 +
+        ctx.negativeReviews * 4 +
+        Math.max(0, 3.6 - restaurant.reputation.rating) * 25 +
+        scandals * 3,
+      0,
+      100,
+    );
+    const old = restaurant.risks.reputation;
+    const v = clamp(old + (repTarget - old) * 0.25, RISK_LIMITS.min, RISK_LIMITS.max);
+    restaurant.risks.reputation = v;
+    const real = v - old;
+    if (Math.abs(real) >= 0.5) {
+      changes.push({
+        riskType: 'reputation',
+        delta: Math.round(real * 10) / 10,
+        reason: real >= 0 ? 'очередь, негатив и рейтинг' : 'хороший сервис гасит негатив',
+      });
+    }
+  }
   // Юридический: медленный дрейф.
   push('legal', 0.15 - RISK_LIMITS.dailyRelax, 'текущий комплаенс');
   // Финансовый: прогноз денег и просрочки.

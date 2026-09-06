@@ -8,6 +8,7 @@ import { useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { useGame } from '@/lib/game/store/gameStore';
 import { KpiCard, SectionCard, WarningBanner, ScoreBar, RangeBadge, money, moneyShort, EmptyState } from '../widgets';
+import { InfoHint } from '../hints';
 import { DISHES_MAP } from '@/lib/game/content/dishes';
 import { DAYS_RU } from '@/lib/game/engine';
 import {
@@ -54,25 +55,28 @@ export function RestaurantScreen() {
     <div className="space-y-4">
       {/* Виджеты (ТЗ §31.3) */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-        <KpiCard icon={Banknote} label="Деньги" value={moneyShort(restaurant.finance.cash)} sub="на счёте" tone={restaurant.finance.cash > 1_000_000 ? 'good' : 'bad'} />
+        <KpiCard icon={Banknote} label="Деньги" value={moneyShort(restaurant.finance.cash)} sub="на счёте" hint="cash" tone={restaurant.finance.cash > 1_000_000 ? 'good' : 'bad'} />
         <KpiCard
           icon={Receipt}
           label="Выручка (нед)"
           value={lastWeek ? moneyShort(lastWeek.revenue) : '—'}
           sub={lastWeek ? `чек ${lastWeek.avgCheck.toLocaleString('ru-RU')} ₽` : 'нет данных'}
           trend={revenueTrend}
+          hint="revenue"
         />
         <KpiCard
           icon={Users}
           label="Гости (нед)"
           value={lastWeek ? lastWeek.guests.toLocaleString('ru-RU') : '—'}
           sub={lastWeek ? `${Math.round(lastWeek.guests / 7)}/день` : ''}
+          hint="guests"
         />
         <KpiCard
           icon={Percent}
           label="Food Cost"
           value={lastWeek ? `${(lastWeek.foodCost * 100).toFixed(1)}%` : '—'}
           sub="цель 30–34%"
+          hint="foodCost"
           tone={lastWeek && lastWeek.foodCost > 0.36 ? 'bad' : lastWeek && lastWeek.foodCost < 0.34 ? 'good' : 'warn'}
         />
         <KpiCard
@@ -80,6 +84,7 @@ export function RestaurantScreen() {
           label="Labor Cost"
           value={lastWeek ? `${(lastWeek.laborCost * 100).toFixed(1)}%` : '—'}
           sub="цель 25–32%"
+          hint="laborCost"
           tone={lastWeek && lastWeek.laborCost > 0.34 ? 'bad' : lastWeek && lastWeek.laborCost < 0.32 ? 'good' : 'warn'}
         />
         <KpiCard
@@ -87,6 +92,7 @@ export function RestaurantScreen() {
           label="Рейтинг"
           value={restaurant.reputation.rating.toFixed(2)}
           sub={`${restaurant.reputation.windowReviews.length} отзывов`}
+          hint="rating"
           tone={restaurant.reputation.rating >= 4.2 ? 'good' : restaurant.reputation.rating >= 3.8 ? 'warn' : 'bad'}
         />
       </div>
@@ -110,11 +116,12 @@ export function RestaurantScreen() {
                   label="Удовлетв."
                   value={`${lastDay.kpi.satisfaction}/100`}
                   tone={lastDay.kpi.satisfaction >= 75 ? 'good' : lastDay.kpi.satisfaction >= 60 ? 'warn' : 'bad'}
+                  hint="satisfaction"
                 />
-                <Stat label="Потеряно в очереди" value={lastDay.kpi.lostGuests.toString()} tone={lastDay.kpi.lostGuests > 10 ? 'bad' : 'neutral'} />
+                <Stat label="Потеряно в очереди" value={lastDay.kpi.lostGuests.toString()} tone={lastDay.kpi.lostGuests > 10 ? 'bad' : 'neutral'} hint="lostGuests" />
                 <Stat label="Позиций продано" value={lastDay.kpi.ordersCount.toLocaleString('ru-RU')} />
-                <Stat label="COGS" value={money(lastDay.kpi.cogs)} />
-                <Stat label="Порча" value={money(lastDay.kpi.wasteCost)} tone={lastDay.kpi.wasteCost > 20_000 ? 'bad' : 'neutral'} />
+                <Stat label="COGS" value={money(lastDay.kpi.cogs)} hint="foodCost" />
+                <Stat label="Порча" value={money(lastDay.kpi.wasteCost)} tone={lastDay.kpi.wasteCost > 20_000 ? 'bad' : 'neutral'} hint="waste" />
               </div>
               <div className="h-56">
                 <ResponsiveContainer width="100%" height="100%">
@@ -166,17 +173,17 @@ export function RestaurantScreen() {
                   <span className="text-3xl font-bold tabular-nums text-stone-900">{weekResult.bsc.total}</span>
                   <span className="text-xs text-stone-500">из 100</span>
                 </div>
-                <ScoreBar label="Финансы (30%)" value={weekResult.bsc.finance} />
-                <ScoreBar label="Клиенты (25%)" value={weekResult.bsc.client} />
-                <ScoreBar label="Процессы (25%)" value={weekResult.bsc.process} />
-                <ScoreBar label="Персонал (20%)" value={weekResult.bsc.staff} />
+                <ScoreBar label="Финансы (30%)" value={weekResult.bsc.finance} hint="ebitda" />
+                <ScoreBar label="Клиенты (25%)" value={weekResult.bsc.client} hint="rating" />
+                <ScoreBar label="Процессы (25%)" value={weekResult.bsc.process} hint="foodCost" />
+                <ScoreBar label="Персонал (20%)" value={weekResult.bsc.staff} hint="fatigue" />
               </div>
             ) : (
               <EmptyState text="BSC появится после первой недели" />
             )}
           </SectionCard>
 
-          <SectionCard title="Прогноз на 4 недели" icon={TrendingUp}>
+          <SectionCard title="Прогноз на 4 недели" icon={TrendingUp} right={<InfoHint hint="forecast" />}>
             {weekResult && weekResult.forecast.length > 0 ? (
               <div className="space-y-2">
                 {weekResult.forecast.map((f) => (
@@ -234,10 +241,13 @@ export function RestaurantScreen() {
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone?: 'good' | 'bad' | 'warn' | 'neutral' }) {
+function Stat({ label, value, tone, hint }: { label: string; value: string; tone?: 'good' | 'bad' | 'warn' | 'neutral'; hint?: string }) {
   return (
     <div className="rounded-lg bg-stone-50 p-2.5">
-      <p className="text-xs text-stone-500">{label}</p>
+      <p className="text-xs text-stone-500 flex items-center gap-1">
+        <span className="truncate">{label}</span>
+        {hint && <InfoHint hint={hint} />}
+      </p>
       <p
         className={
           tone === 'good'

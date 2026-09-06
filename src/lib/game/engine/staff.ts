@@ -39,7 +39,11 @@ export function effectiveStaff(staff: StaffState, roleId: RoleId, day: number, h
   // Адаптация новичков: newHires — счётчик неадаптированных, тает на 1/день.
   const newHires = Math.min(pool.newHires, pool.count);
   const adaptation = pool.count > 0 ? 1 - 0.25 * (newHires / pool.count) : 1;
-  const fatigueFactor = 1 - 0.4 * (pool.fatigue / 100);
+  // Усталость бьёт по мощности МЯГКО и с порога 50 (само насыщение не перегружает
+  // кухню — только реальное выгорание). До 50 — без штрафа; 100 → −15%.
+  // Максимум нарочно мал: глубокая спираль «усталость→перегруз→усталость»
+  // делала бы выгорание невосстановимым даже после найма.
+  const fatigueFactor = 1 - 0.15 * Math.max(0, pool.fatigue - 50) / 50;
   // Выходит min(запланировано, численность пула) × доступность.
   const onShift = Math.min(scheduled, pool.count);
   return Math.max(0, onShift * attendance * adaptation * fatigueFactor);
@@ -58,7 +62,12 @@ export function organizationFactor(staff: StaffState, day: number, hour: number)
 /**
  * Мощность станции (ТЗ §11.3):
  *   StationCapacity = Σ(StaffOnStation × BaseThroughput × weights)
- *                   × EquipmentFactor × FatigueFactor(общий) × OrganizationFactor
+ *                   × EquipmentFactor × OrganizationFactor
+ *
+ * ВАЖНО (баланс): усталость учитывается ОДИН раз — на уровне effectiveStaff
+ * (per-pool, см. выше). Раньше stationCapacity дополнительно умножал на
+ * среднюю усталость всего штата: двойной штраф давал −64% мощности при
+ * усталости 100 и разгонял спираль «усталость → перегруз → усталость».
  */
 export function stationCapacity(restaurant: Restaurant, station: StationType, day: number, hour: number): number {
   const staff = restaurant.staff;
@@ -72,10 +81,8 @@ export function stationCapacity(restaurant: Restaurant, station: StationType, da
   // Кофе-станция зависит от кофемашины, остальная кухня — от кухонной зоны.
   const zone = station === 'coffee' ? restaurant.equipment.coffee : restaurant.equipment.kitchen;
   const equipFactor = EQUIPMENT_LEVELS[zone.level].throughputFactor * (1 - zone.wear / 250);
-  const avgFatigue = averageFatigue(staff);
-  const fatigueFactor = 1 - 0.4 * (avgFatigue / 100);
   const org = organizationFactor(staff, day, hour);
-  return Math.max(0, units * STATIONS[station].baseThroughput * equipFactor * fatigueFactor * org);
+  return Math.max(0, units * STATIONS[station].baseThroughput * equipFactor * org);
 }
 
 /** Средняя усталость по работающим ролям. */
@@ -138,24 +145,63 @@ export function accruePayrollDay(restaurant: Restaurant, date: GameDate): number
   return Math.round(gross);
 }
 
-/** Обновление усталости в конце дня (ТЗ §14.8). */
-export function updateFatigue(restaurant: Restaurant, dayLoads: { load: number }[], diffFatigueRate: number): void {
-  const avgLoad = dayLoads.length > 0 ? dayLoads.reduce((s, l) => s + l.load, 0) / dayLoads.length : 0.5;
+/**
+ * Обновление усталости в конце дня (ТЗ §14.8) — ПОРОЛЕВАЯ модель.
+ *
+ * ИСПРАВЛЕНИЕ БАГА «усталость не накапливается»: раньше порог сравнивался со
+ * средним по ВСЕМ часам максимальной загрузкой. В здоровом ресторане пик
+ * приходится на 2–3 часа, остальные часы недогружены — среднее почти никогда
+ * не превышало 1.0, и усталость вечно «отдыхала». Теперь для каждой роли:
+ *
+ *   roleLoad = максимум загрузки станций роли (для официанта — гостей на чел.)
+ *   shiftPressure = запланированные смены / численность пула
+ *     (1 человек на 2 смены в день = 12-часовой день = давление 2.0)
+ *   load = max(roleLoad, shiftPressure)
+ *
+ * Правила роста/восстановления — НЕПРЕРЫВНАЯ кривая (баланс):
+ *   рост/день = (load − 0.9) × 12, ограничен [−5; +10]
+ *   • равновесие при пиковой загрузке 90% — «нормальный тяжёлый день» стабилен;
+ *   • 110% загрузки → +2.4/день → «жёлтая» усталость за ~2 недели;
+ *   • 130–150% перегруз → +4.8…7/день → красная зона за месяц;
+ *   • щадящий день и выходной (0 смен) → восстановление −3…−5/день.
+ * Усталость бьёт по мощности только с порога 50 (до −15% при 100) — сигнал,
+ * а не капкан: наймите людей или ослабьте график → усталость падает.
+ */
+export function updateFatigue(
+  restaurant: Restaurant,
+  date: GameDate,
+  roleLoads: Partial<Record<RoleId, number>>,
+  diffFatigueRate: number,
+): void {
   const staff = restaurant.staff;
+  const avgLoad = averageLoadOfLoads(roleLoads);
   for (const roleId of ROLE_IDS) {
     const pool = staff.pools[roleId];
     if (pool.count <= 0) continue;
-    const growth = avgLoad > STAFF_DYNAMICS.fatigueLoadThreshold
-      ? (avgLoad - 1) * STAFF_DYNAMICS.fatigueRate * diffFatigueRate
-      : -STAFF_DYNAMICS.restRecovery;
+    const shifts = staff.schedule[roleId]?.[date.day];
+    const scheduled = shifts ? shifts.morning + shifts.evening : 0;
+    // Давление графика: сколько смен сегодня приходится на одного человека.
+    const shiftPressure = scheduled > 0 ? scheduled / pool.count : 0;
+    const roleLoad = Math.max(roleLoads[roleId] ?? 0, shiftPressure);
+    // Непрерывная кривая (см. комментарий к функции): кап −5/+10 держит окно
+    // реакции игрока даже при катастрофическом дне.
+    let growth = (roleLoad - 0.9) * 12;
+    if (scheduled === 0) growth = Math.min(growth, -STAFF_DYNAMICS.restRecovery * 0.9);
+    growth = clamp(growth, -5, 10) * diffFatigueRate;
     pool.fatigue = clamp(pool.fatigue + growth, 0, 100);
     // Мораль: усталость и перегрузка давят, чаевые поднимают (в day.ts).
-    const targetMorale = clamp(85 - pool.fatigue * 0.5 - Math.max(0, avgLoad - 1) * 30, 0, 100);
+    const targetMorale = clamp(85 - pool.fatigue * 0.5 - Math.max(0, roleLoad - 1) * 30, 0, 100);
     pool.morale += (targetMorale - pool.morale) * 0.3;
     pool.morale = clamp(pool.morale, 0, 100);
     // Адаптация новичков тает.
     pool.newHires = Math.max(0, pool.newHires - 1);
   }
+}
+
+/** Средняя нагрузка по ролям (для кадрового риска). */
+function averageLoadOfLoads(loads: Partial<Record<RoleId, number>>): number {
+  const vals = Object.values(loads).filter((v): v is number => typeof v === 'number' && v > 0);
+  return vals.length > 0 ? vals.reduce((s, v) => s + v, 0) / vals.length : 0.5;
 }
 
 /** Увольнение случайного сотрудника роли (событие). */

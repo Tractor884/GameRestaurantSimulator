@@ -25,7 +25,11 @@ export function computeForecast(state: GameState, horizon = FORECAST.horizonWeek
   for (let i = 1; i <= horizon; i++) {
     const week = state.week + i;
     const bigPayments: { week: number; label: string; amount: number }[] = [];
-    let weeklyOut = avgCogs + payrollWithSocial + FINANCE.otherWeeklyCost + r.marketing.campaigns.reduce((s, c) => s + c.weeklyBudget, 0);
+    // Бюджет — только активные кампании: завершённые деньги не списывают.
+    const activeCampaignBudget = r.marketing.campaigns
+      .filter((c) => c.endedWeek == null)
+      .reduce((s, c) => s + c.weeklyBudget, 0);
+    let weeklyOut = avgCogs + payrollWithSocial + FINANCE.otherWeeklyCost + activeCampaignBudget + r.marketing.cleaningBudget;
 
     if (week % 4 === 0) {
       const rentUtils = r.rentMonthly + r.utilitiesMonthly;

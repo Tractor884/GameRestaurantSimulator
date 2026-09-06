@@ -20,10 +20,17 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { Megaphone, Play, Square, Sparkles, Droplets, Wallet, Brush } from 'lucide-react';
+import { Megaphone, Play, Square, Sparkles, Droplets, Wallet, Brush, TrendingDown, CheckCircle2 } from 'lucide-react';
 import type { MarketingCampaign, SegmentId } from '@/lib/game/types';
+import { InfoHint } from '../hints';
 
 const DURATION_OPTIONS = [4, 8, 12, 26];
+
+/** Затухание послесвечия кампании: −50%/нед, 0 после 2 недель. */
+function residualLift(campaign: MarketingCampaign, week: number): number {
+  if (campaign.endedWeek == null) return 1;
+  return Math.pow(0.5, Math.max(0, week - campaign.endedWeek));
+}
 
 export function MarketingScreen() {
   const state = useGame((s) => s.state)!;
@@ -40,7 +47,10 @@ export function MarketingScreen() {
     [campaigns],
   );
 
-  const weeklySpend = campaigns.reduce((s, c) => s + c.weeklyBudget, 0);
+  // Идущие кампании: только они тратят бюджет (завершённые — послесвечение).
+  const activeCampaigns = campaigns.filter((c) => c.endedWeek == null);
+  const decayingCampaigns = campaigns.filter((c) => c.endedWeek != null);
+  const weeklySpend = activeCampaigns.reduce((s, c) => s + c.weeklyBudget, 0);
   const lastWeek = state.history.weekStats[state.history.weekStats.length - 1];
   const marketingShare = lastWeek && lastWeek.revenue > 0 ? (weeklySpend + restaurant.marketing.cleaningBudget) / lastWeek.revenue : null;
 
@@ -50,15 +60,21 @@ export function MarketingScreen() {
         <KpiCard
           icon={Megaphone}
           label="Активных кампаний"
-          value={String(campaigns.length)}
-          sub={`расход ${moneyShort(weeklySpend)}/нед`}
-          tone={campaigns.length > 0 ? 'good' : 'default'}
+          value={String(activeCampaigns.length)}
+          sub={
+            decayingCampaigns.length > 0
+              ? `расход ${moneyShort(weeklySpend)}/нед · ${decayingCampaigns.length} затухают`
+              : `расход ${moneyShort(weeklySpend)}/нед`
+          }
+          hint="campaignLift"
+          tone={activeCampaigns.length > 0 ? 'good' : 'default'}
         />
         <KpiCard
           icon={Wallet}
           label="Маркетинг+клининг"
           value={marketingShare !== null ? pct(marketingShare) : '—'}
           sub="цель 2–5% выручки"
+          hint="marketingShare"
           tone={
             marketingShare === null
               ? 'default'
@@ -74,6 +90,7 @@ export function MarketingScreen() {
           label="Чистота"
           value={`${restaurant.cleanliness.toFixed(0)}/100`}
           sub={`клининг ${moneyShort(restaurant.marketing.cleaningBudget)}/нед`}
+          hint="cleanliness"
           tone={restaurant.cleanliness >= 70 ? 'good' : restaurant.cleanliness >= 50 ? 'warn' : 'bad'}
         />
         <KpiCard
@@ -85,16 +102,28 @@ export function MarketingScreen() {
       </div>
 
       {/* Каналы */}
-      <SectionCard title="Каналы привлечения" icon={Megaphone}>
+      <SectionCard
+        title="Каналы привлечения"
+        icon={Megaphone}
+        right={
+          <InfoHint
+            hint={{
+              title: 'Как работают кампании',
+              body: 'Вы выбираете бюджет в неделю и длительность. Пока кампания идёт — бюджет списывается ежедневно, а спрос по сегментам растёт. Когда срок заканчивается, кампания сама останавливается: расходы прекращаются, а эффект затухает ещё ~2 недели — гости «помнят» рекламу.',
+              advice: 'Разные каналы любят разные аудитории: сопоставляйте канал с тем, кого вам не хватает (см. карточки каналов).',
+            }}
+          />
+        }
+      >
         <div className="grid md:grid-cols-2 gap-4">
           {MARKETING_CHANNELS.map((ch) => {
-            const active = campaignByChannel.get(ch.id);
+            const current = campaignByChannel.get(ch.id) ?? null;
             return (
               <ChannelCard
                 /* key пересоздаёт карточку при старте/остановке кампании — бюджет сбрасывается к актуальному */
-                key={active ? `${ch.id}-${active.weeklyBudget}` : ch.id}
+                key={current ? `${ch.id}-${current.weeklyBudget}` : ch.id}
                 channelId={ch.id}
-                campaign={active ?? null}
+                campaign={current}
                 week={state.week}
                 disabled={disabled}
                 onStart={(budget, duration) => campaign(ch.id, budget, duration)}
@@ -156,7 +185,8 @@ export function MarketingScreen() {
   );
 }
 
-/** Карточка канала маркетинга. */
+/** Карточка канала маркетинга: состояния кампании —
+ *  идёт (бюджет списывается) / последняя неделя / завершена (эффект затухает). */
 function ChannelCard({
   channelId,
   campaign,
@@ -175,23 +205,32 @@ function ChannelCard({
   const ch = MARKETING_CHANNELS_MAP[channelId];
   const [budget, setBudget] = useState(campaign?.weeklyBudget ?? ch.defaultWeeklyBudget);
   const [duration, setDuration] = useState(8);
-  const active = !!campaign;
+
+  // Завершённая кампания: деньги не тратятся, показываем затухающий остаток.
+  const ended = campaign != null && campaign.endedWeek != null;
+  const active = campaign != null && !ended;
+  const budgetShown = active || ended ? campaign!.weeklyBudget : budget;
 
   // Подсказка лифта: maxLift × (1 − exp(−дневной бюджет / scale)).
-  const dailySpend = budget / 7;
+  const dailySpend = budgetShown / 7;
   const lift = ch.maxLift * (1 - Math.exp(-dailySpend / ch.scale));
   const best = Object.entries(ch.affinity).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))[0];
   const bestSegName = SEGMENTS[best[0] as SegmentId]?.name ?? '';
   const bestSegAffinity = best[1] ?? 0;
   const weightedLift = lift * bestSegAffinity;
 
+  // Остаток недель и послесвечение.
   const remaining = campaign ? Math.max(0, campaign.startWeek + campaign.durationWeeks - week) : 0;
+  const residual = campaign ? residualLift(campaign, week) : 0;
+  const decayingLift = ended ? weightedLift * residual : weightedLift;
 
   return (
     <div
       className={cn(
         'rounded-xl border p-4 space-y-3',
-        active ? 'border-amber-300 bg-amber-50/50' : 'border-stone-200 bg-white',
+        active && 'border-amber-300 bg-amber-50/50',
+        ended && 'border-stone-300 bg-stone-50/70',
+        !campaign && 'border-stone-200 bg-white',
       )}
     >
       <div className="flex items-start justify-between gap-2">
@@ -200,7 +239,21 @@ function ChannelCard({
           <p className="text-xs text-stone-500 mt-0.5">{ch.description}</p>
         </div>
         {active ? (
-          <Badge className="bg-amber-600 text-white shrink-0">Активна</Badge>
+          remaining <= 1 ? (
+            <Badge className="bg-red-100 text-red-800 hover:bg-red-100 shrink-0">
+              <TrendingDown className="h-3 w-3 mr-1" aria-hidden />
+              Последняя неделя
+            </Badge>
+          ) : (
+            <Badge className="bg-amber-600 text-white shrink-0">
+              Активна · {remaining} нед
+            </Badge>
+          )
+        ) : ended ? (
+          <Badge variant="secondary" className="bg-stone-200 text-stone-700 hover:bg-stone-200 shrink-0">
+            <CheckCircle2 className="h-3 w-3 mr-1" aria-hidden />
+            Завершена
+          </Badge>
         ) : (
           <Badge variant="secondary" className="bg-stone-100 text-stone-600 shrink-0">
             до +{(ch.maxLift * 100).toFixed(0)}%
@@ -209,15 +262,25 @@ function ChannelCard({
       </div>
 
       <div className="text-xs text-stone-600 bg-stone-50 rounded-lg px-2.5 py-2">
-        При бюджете <b className="tabular-nums text-stone-800">{moneyShort(budget)}</b>/нед: спрос{' '}
-        <b className="text-emerald-700">+{pct(weightedLift, 1)}</b> для сегмента «{bestSegName}»
-        <span className="text-stone-400"> (отклик ×{bestSegAffinity.toFixed(1)})</span>
+        {ended ? (
+          <>
+            Послесвечение:{' '}
+            <b className="text-emerald-700">+{pct(decayingLift, 1)}</b> спроса для «{bestSegName}»
+            <span className="text-stone-400"> · затухает, −50%/нед · бюджета нет</span>
+          </>
+        ) : (
+          <>
+            При бюджете <b className="tabular-nums text-stone-800">{moneyShort(budgetShown)}</b>/нед:{' '}
+            спрос <b className="text-emerald-700">+{pct(weightedLift, 1)}</b> для сегмента «{bestSegName}»
+            <span className="text-stone-400"> (отклик ×{bestSegAffinity.toFixed(1)})</span>
+          </>
+        )}
       </div>
 
       <div className="space-y-2">
         <div className="flex items-baseline justify-between text-xs">
           <span className="text-stone-500">Бюджет, ₽/нед</span>
-          <span className="font-semibold tabular-nums text-stone-800">{money(budget)}</span>
+          <span className="font-semibold tabular-nums text-stone-800">{money(budgetShown)}</span>
         </div>
         <Slider
           value={[budget]}
@@ -274,7 +337,7 @@ function ChannelCard({
             disabled={disabled}
           >
             <Play className="h-4 w-4 mr-1.5" aria-hidden />
-            Запустить
+            {ended ? 'Запустить заново' : 'Запустить'}
           </Button>
         )}
       </div>

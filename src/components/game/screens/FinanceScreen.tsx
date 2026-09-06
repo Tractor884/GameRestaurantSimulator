@@ -7,6 +7,7 @@
 import { useMemo, useState } from 'react';
 import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, KpiCard, MetricRow, EmptyState, WarningBanner, money, moneyShort, pct } from '../widgets';
+import { InfoHint } from '../hints';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -145,16 +146,18 @@ export function FinanceScreen() {
                     label="Порча и потери"
                     value={money(-pnl.wasteCost)}
                     tone={pnl.wasteCost > 60_000 ? 'bad' : 'neutral'}
+                    hint="waste"
                   />
                   <MetricRow label="Валовая прибыль" value={money(pnl.grossProfit)} />
                   <EmphasizedRow
                     label="EBITDA (операционная прибыль)"
                     value={`${money(pnl.operatingProfit)} · ${ebitdaMargin !== null ? pct(ebitdaMargin) : ''}`}
+                    hint="ebitda"
                   />
                 </div>
                 <div>
-                  <MetricRow label="Зарплата (gross)" value={money(-pnl.payroll)} />
-                  <MetricRow label="Соц. взносы (30%)" value={money(-pnl.socialContributions)} />
+                  <MetricRow label="Зарплата (gross)" value={money(-pnl.payroll)} hint="laborCost" />
+                  <MetricRow label="Соц. взносы (30%)" value={money(-pnl.socialContributions)} hint="laborCost" />
                   <MetricRow label="Аренда (начислено)" value={money(-pnl.rentAccrued)} />
                   <MetricRow label="Коммунальные (начислено)" value={money(-pnl.utilitiesAccrued)} />
                   <MetricRow label="Маркетинг" value={money(-pnl.marketing)} />
@@ -169,6 +172,7 @@ export function FinanceScreen() {
                     label="Чистая прибыль"
                     value={money(pnl.netProfit)}
                     tone={pnl.netProfit >= 0 ? 'good' : 'bad'}
+                    hint="netProfit"
                   />
                 </div>
               </div>
@@ -326,10 +330,12 @@ function EmphasizedRow({
   label,
   value,
   tone = 'amber',
+  hint,
 }: {
   label: string;
   value: string;
   tone?: 'amber' | 'red';
+  hint?: string;
 }) {
   return (
     <div
@@ -338,7 +344,10 @@ function EmphasizedRow({
         tone === 'amber' ? 'border-amber-200 bg-amber-50' : 'border-red-200 bg-red-50',
       )}
     >
-      <span className="text-sm font-bold text-stone-800">{label}</span>
+      <span className="text-sm font-bold text-stone-800 flex items-center gap-1">
+        {label}
+        {hint && <InfoHint hint={hint} />}
+      </span>
       <span
         className={cn(
           'text-sm font-bold tabular-nums',

@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { InfoHint, HINTS, type HintContent, type HintKey } from './hints';
 import {
   AlertTriangle,
   TrendingUp,
@@ -16,6 +17,19 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
+/** Разрешение подсказки: ключ из HINTS / готовый объект / произвольный текст. */
+export function resolveHint(
+  hint: HintContent | string | HintKey | undefined,
+  label: string,
+): HintContent | undefined {
+  if (hint === undefined) return undefined;
+  if (typeof hint === 'string' && hint in HINTS) return HINTS[hint as HintKey];
+  if (typeof hint === 'string') return { title: label, body: hint };
+  return hint;
+}
+
+export type HintInput = HintContent | string | HintKey;
+
 export function KpiCard({
   icon: Icon,
   label,
@@ -23,6 +37,7 @@ export function KpiCard({
   sub,
   trend,
   tone = 'default',
+  hint,
 }: {
   icon: LucideIcon;
   label: string;
@@ -30,6 +45,8 @@ export function KpiCard({
   sub?: string;
   trend?: number; // доля изменения
   tone?: 'default' | 'good' | 'bad' | 'warn';
+  /** Ключ из HINTS, готовый объект или текст — карточка-подсказка при наведении на (i). */
+  hint?: HintInput;
 }) {
   const toneCls = {
     default: 'text-stone-800',
@@ -37,12 +54,16 @@ export function KpiCard({
     bad: 'text-red-700',
     warn: 'text-amber-700',
   }[tone];
+  const hintContent = resolveHint(hint, label);
   return (
     <Card className="border-stone-200 bg-white shadow-sm hover:shadow transition-shadow">
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-xs text-stone-500 font-medium uppercase tracking-wide truncate">{label}</p>
+            <p className="text-xs text-stone-500 font-medium uppercase tracking-wide truncate flex items-center gap-1">
+              <span className="truncate">{label}</span>
+              {hintContent && <InfoHint hint={hintContent} />}
+            </p>
             <p className={cn('text-xl font-bold tabular-nums mt-1', toneCls)}>{value}</p>
             {sub && <p className="text-xs text-stone-500 mt-0.5 truncate">{sub}</p>}
           </div>
@@ -110,12 +131,17 @@ export function MetricRow({
 }: {
   label: string;
   value: ReactNode;
-  hint?: string;
+  /** Ключ из HINTS / объект / текст — вместо примитивного title теперь карточка-подсказка. */
+  hint?: HintInput;
   tone?: 'good' | 'bad' | 'neutral';
 }) {
+  const hintContent = resolveHint(hint, label);
   return (
-    <div className="flex items-baseline justify-between py-1.5 border-b border-stone-100 last:border-0" title={hint}>
-      <span className="text-sm text-stone-600">{label}</span>
+    <div className="flex items-baseline justify-between py-1.5 border-b border-stone-100 last:border-0">
+      <span className="text-sm text-stone-600 flex items-center gap-1">
+        {label}
+        {hintContent && <InfoHint hint={hintContent} />}
+      </span>
       <span
         className={cn(
           'text-sm font-semibold tabular-nums',
@@ -130,13 +156,29 @@ export function MetricRow({
   );
 }
 
-export function ScoreBar({ label, value, max = 100, unit = '' }: { label: string; value: number; max?: number; unit?: string }) {
+export function ScoreBar({
+  label,
+  value,
+  max = 100,
+  unit = '',
+  hint,
+}: {
+  label: string;
+  value: number;
+  max?: number;
+  unit?: string;
+  hint?: HintInput;
+}) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
   const color = pct >= 70 ? 'bg-emerald-500' : pct >= 45 ? 'bg-amber-500' : 'bg-red-500';
+  const hintContent = resolveHint(hint, label);
   return (
     <div>
       <div className="flex justify-between text-xs mb-1">
-        <span className="text-stone-600">{label}</span>
+        <span className="text-stone-600 flex items-center gap-1">
+          {label}
+          {hintContent && <InfoHint hint={hintContent} />}
+        </span>
         <span className="font-semibold tabular-nums text-stone-800">
           {value.toFixed(0)}
           {unit}

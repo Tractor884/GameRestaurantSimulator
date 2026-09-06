@@ -103,6 +103,10 @@ interface GameStore {
   importSave(json: string): boolean;
   resetGame(): void;
   dismissToasts(): void;
+  /** Финальный экран: пользователь сам решает, когда закрыть (не автоскрывается). */
+  finalSeen: boolean;
+  showFinal(): void;
+  hideFinal(): void;
 }
 
 function pushToast(get: () => GameStore, message: string, ok: boolean) {
@@ -116,6 +120,7 @@ export const useGame = create<GameStore>((set, get) => ({
   busy: false,
   lastToasts: [],
   setupDraft: null,
+  finalSeen: false,
 
   setScreen: (screen) => set({ screen }),
 
@@ -151,10 +156,18 @@ export const useGame = create<GameStore>((set, get) => ({
     set({ busy: true });
     try {
       const { state: newState, result } = simulateWeek(s.state, s.state.seed);
-      set({ state: newState });
+      set({ state: newState, finalSeen: false });
       persist(AUTOSAVE_KEY, newState);
       const toasts: { message: string; ok: boolean }[] = [];
-      if (result.gameOver) {
+      if (result) {
+        // Итог закрытой недели — короткая сводка в тосте.
+        const profit = result.pnl.netProfit;
+        toasts.push({
+          message: `Неделя ${result.week} закрыта: прибыль ${(profit / 1000).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} тыс ₽`,
+          ok: profit >= 0,
+        });
+      }
+      if (result?.gameOver) {
         toasts.push({
           message: result.finalScore
             ? `Финал! Счёт: ${result.finalScore.total}/1000 (${result.gameStatus})`
@@ -162,7 +175,7 @@ export const useGame = create<GameStore>((set, get) => ({
           ok: result.gameStatus !== 'bankrupt',
         });
       }
-      if (result.quarterlyReview) {
+      if (result?.quarterlyReview) {
         toasts.push({ message: `Квартальный разбор: BSC ${result.quarterlyReview.bscAvg} — ${result.quarterlyReview.verdict}`, ok: true });
       }
       if (newState.activeEvents.some((e) => !e.resolved)) {
@@ -219,7 +232,8 @@ export const useGame = create<GameStore>((set, get) => ({
     if (!raw) return false;
     const data = JSON.parse(raw);
     const state = data.state ?? data;
-    set({ state, screen: 'restaurant' });
+    migrateState(state);
+    set({ state, screen: 'restaurant', finalSeen: false });
     return true;
   },
 
@@ -256,11 +270,8 @@ export const useGame = create<GameStore>((set, get) => ({
       const data = JSON.parse(raw);
       const state = (data.state ?? data) as GameState;
       if (!state.restaurant || !state.history) return false;
-      // Миграция сейвов старых версий формата (ТЗ §32.4).
-      if (!state.restaurant.marketing.autoPurchase) {
-        state.restaurant.marketing.autoPurchase = { enabled: true, coverDays: 2 };
-      }
-      set({ state, screen: 'restaurant' });
+      migrateState(state);
+      set({ state, screen: 'restaurant', finalSeen: false });
       return true;
     } catch {
       return false;
@@ -278,7 +289,8 @@ export const useGame = create<GameStore>((set, get) => ({
       const data = JSON.parse(json);
       const state: GameState = data.state ?? data;
       if (!state.restaurant || !state.history) return false;
-      set({ state, screen: 'restaurant' });
+      migrateState(state);
+      set({ state, screen: 'restaurant', finalSeen: false });
       persist(AUTOSAVE_KEY, state);
       return true;
     } catch {
@@ -288,11 +300,36 @@ export const useGame = create<GameStore>((set, get) => ({
 
   resetGame: () => {
     localStorage.removeItem(AUTOSAVE_KEY);
-    set({ state: null, screen: 'restaurant', lastToasts: [] });
+    set({ state: null, screen: 'restaurant', lastToasts: [], finalSeen: false });
   },
 
   dismissToasts: () => set({ lastToasts: [] }),
+  showFinal: () => set({ finalSeen: false }),
+  hideFinal: () => set({ finalSeen: true }),
 }));
+
+/** Миграция сейвов старых версий формата (ТЗ §32.4).
+ *  v1 → v2: источник отзывов (sourceId), автозаказ. */
+function migrateState(state: GameState): void {
+  const r = state.restaurant;
+  if (!r) return;
+  if (!r.marketing.autoPurchase) {
+    r.marketing.autoPurchase = { enabled: true, coverDays: 2 };
+  }
+  // Отзывы без источника: восстанавливаем по тексту (старый формат писал источник в конце текста).
+  for (const rev of r.reputation.windowReviews) {
+    if (!rev.sourceId) {
+      const t = rev.text;
+      rev.sourceId = t.includes('Карты')
+        ? 'maps'
+        : t.includes('Агрегатор')
+          ? 'aggregator'
+          : t.includes('Соцсети')
+            ? 'social'
+            : 'word_of_mouth';
+    }
+  }
+}
 
 function persist(key: string, state: GameState, name?: string) {
   try {

@@ -58,7 +58,8 @@ export function AnalyticsScreen() {
 
   const bscData = useMemo(() => weekStats.map((w) => ({ week: w.week, bsc: w.bsc })), [weekStats]);
 
-  const last12 = useMemo(() => [...weekStats].slice(-12).reverse(), [weekStats]);
+  // ВСЕ недели — в прокрутке; высота зоны рассчитана на ~10 строк.
+  const allWeeks = useMemo(() => [...weekStats].reverse(), [weekStats]);
 
   if (weekStats.length < 2) {
     return (
@@ -78,6 +79,7 @@ export function AnalyticsScreen() {
           label="Средний чек"
           value={`${Math.round(avgCheck).toLocaleString('ru-RU')} ₽`}
           sub="цель 3500–4000 ₽"
+          hint="avgCheck"
           tone={avgCheck >= 3500 ? 'good' : 'warn'}
         />
         <KpiCard
@@ -91,6 +93,7 @@ export function AnalyticsScreen() {
           label="Средний рейтинг"
           value={avgRating.toFixed(2)}
           sub="по закрытым неделям"
+          hint="rating"
           tone={avgRating >= 4.2 ? 'good' : avgRating >= 4.0 ? 'warn' : 'bad'}
         />
         <KpiCard
@@ -98,6 +101,7 @@ export function AnalyticsScreen() {
           label="Итоговая прибыль"
           value={moneyShort(state.history.cumulativeNetProfit)}
           sub={`недель закрыто: ${weekStats.length}`}
+          hint="netProfit"
           tone={state.history.cumulativeNetProfit >= 0 ? 'good' : 'bad'}
         />
       </div>
@@ -203,30 +207,38 @@ export function AnalyticsScreen() {
         </div>
       </SectionCard>
 
-      {/* Таблица недель */}
-      <SectionCard title="Таблица недель (последние 12)" icon={BarChart3}>
-        <ScrollArea className="max-h-[420px]">
-          <div className="overflow-x-auto">
-            <Table className="min-w-[760px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Нед</TableHead>
-                  <TableHead className="text-right">Гости</TableHead>
-                  <TableHead className="text-right">Чек</TableHead>
-                  <TableHead className="text-right">Выручка</TableHead>
-                  <TableHead className="text-right">FC%</TableHead>
-                  <TableHead className="text-right">LC%</TableHead>
-                  <TableHead className="text-right">Прибыль</TableHead>
-                  <TableHead className="text-right">Рейтинг</TableHead>
-                  <TableHead className="text-right">BSC</TableHead>
+      {/* Таблица недель: ~10 последних видны, остальные — прокруткой */}
+      <SectionCard
+        title="Таблица недель"
+        icon={BarChart3}
+        right={
+          <span className="text-xs text-stone-400 whitespace-nowrap">
+            всего {weekStats.length}{allWeeks.length > 10 ? ' · видно 10, остальные ниже' : ''}
+          </span>
+        }
+      >
+        <div className="overflow-x-auto rounded-lg border border-stone-100">
+          <ScrollArea className="h-[436px]">
+            <Table className="min-w-[720px]">
+              <TableHeader className="sticky top-0 z-10">
+                <TableRow className="bg-stone-50 hover:bg-stone-50">
+                  <TableHead className="text-xs h-9">Нед</TableHead>
+                  <TableHead className="text-xs text-right h-9">Гости</TableHead>
+                  <TableHead className="text-xs text-right h-9">Чек, ₽</TableHead>
+                  <TableHead className="text-xs text-right h-9">Выручка</TableHead>
+                  <TableHead className="text-xs text-right h-9">FC%</TableHead>
+                  <TableHead className="text-xs text-right h-9">LC%</TableHead>
+                  <TableHead className="text-xs text-right h-9">Прибыль</TableHead>
+                  <TableHead className="text-xs text-right h-9">Рейтинг</TableHead>
+                  <TableHead className="text-xs text-right h-9">BSC</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {last12.map((w) => (
-                  <TableRow key={w.week}>
+                {allWeeks.map((w) => (
+                  <TableRow key={w.week} className="text-xs whitespace-nowrap">
                     <TableCell className="font-medium tabular-nums">{w.week}</TableCell>
                     <TableCell className="text-right tabular-nums">{w.guests.toLocaleString('ru-RU')}</TableCell>
-                    <TableCell className="text-right tabular-nums">{Math.round(w.avgCheck).toLocaleString('ru-RU')} ₽</TableCell>
+                    <TableCell className="text-right tabular-nums">{Math.round(w.avgCheck).toLocaleString('ru-RU')}</TableCell>
                     <TableCell className="text-right tabular-nums">{moneyShort(w.revenue)}</TableCell>
                     <TableCell className="text-right">
                       <span
@@ -276,8 +288,11 @@ export function AnalyticsScreen() {
                 ))}
               </TableBody>
             </Table>
-          </div>
-        </ScrollArea>
+          </ScrollArea>
+        </div>
+        <p className="text-xs text-stone-400 mt-2">
+          Новые недели сверху; в блоке видно ~10 строк — остальные доступны прокруткой.
+        </p>
       </SectionCard>
     </div>
   );

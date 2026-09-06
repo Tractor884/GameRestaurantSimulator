@@ -2,7 +2,7 @@
  * Шаблоны отзывов (ТЗ §16, §31.6). ~40 шаблонов по диапазонам оценок.
  * ReviewScore = clamp(Satisfaction/20 + noise + eventBonus - scandalPenalty, 1, 5)
  */
-import type { SegmentId } from '../types';
+import type { ReviewSourceId, SegmentId } from '../types';
 
 export interface ReviewTemplate {
   score: number; // 1..5
@@ -56,6 +56,20 @@ export const REVIEW_TEMPLATES: ReviewTemplate[] = [
 
 export const REVIEW_CHANNELS = ['Карты', 'Агрегатор отзывов', 'Соцсети', 'Сарафан'];
 
+/** Источники отзывов (ТЗ §16.7): для фильтра на экране отзывов.
+ * Разные площадки — разный вес в глазах гостей: карты решают для новых,
+ * сарафан — для возвратных. */
+export const REVIEW_SOURCES: { id: ReviewSourceId; name: string; hint: string }[] = [
+  { id: 'maps', name: 'Карты', hint: 'Яндекс.Карты и 2ГИС: главный источник новых гостей' },
+  { id: 'aggregator', name: 'Агрегаторы', hint: 'Отзовики и порталы: скандальные отзывы здесь больнее всего' },
+  { id: 'social', name: 'Соцсети', hint: 'Публичные посты: быстро разносятся, тяжело гасятся' },
+  { id: 'word_of_mouth', name: 'Сарафан', hint: 'Личные рекомендации: сильнее всего влияет на возвратность' },
+];
+
+export const REVIEW_SOURCES_MAP: Record<ReviewSourceId, string> = Object.fromEntries(
+  REVIEW_SOURCES.map((s) => [s.id, s.name]),
+) as Record<ReviewSourceId, string>;
+
 /** Лёгкая сегментная окраска текста. */
 export function segmentFlavor(segment: SegmentId): string {
   const map: Record<SegmentId, string> = {
@@ -71,8 +85,9 @@ export function segmentFlavor(segment: SegmentId): string {
   return map[segment];
 }
 
-export function pickReviewTemplate(score: number): ReviewTemplate {
+/** Выбор шаблона отзыва по оценке. index — детерминированный (Rng.int), Math.random в движке запрещён. */
+export function pickReviewTemplate(score: number, index: number): ReviewTemplate {
   const band = score <= 2 ? 1 : score === 3 ? 3 : score === 4 ? 4 : 5;
   const pool = REVIEW_TEMPLATES.filter((t) => t.score === band);
-  return pool[Math.floor(Math.random() * pool.length)];
+  return pool[Math.abs(index) % pool.length];
 }

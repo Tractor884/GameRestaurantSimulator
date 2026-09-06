@@ -22,11 +22,14 @@ import { FINANCE } from '../config/finance.config';
 import { DIFFICULTIES } from '../config/difficulty.config';
 import { LOCATIONS_MAP } from '../config/locations.config';
 import { monthOfDay, dayOfYear } from '../config/demandProfiles.config';
+import { STAFF_ROLES, ROLE_IDS } from '../config/staffRoles.config';
+import type { RoleId, StationType } from '../types';
 import { cloneState, addTransaction, workingHours, dayIndex, clamp } from './core';
 import { hourlyDemand, emptyReturning } from './demand';
 import { simulateHour, type QueueEntry } from './hour';
 import { processDeliveries, processEndOfDayLosses, buildAutoOrder, placePurchase } from './inventory';
 import { accruePayrollDay, updateFatigue, averageFatigue, dayCoverage } from './staff';
+import { closeWeek } from './weekclose';
 import {
   generateReviews,
   addReviews,
@@ -61,6 +64,20 @@ export function simulateDay(
   // ===== 1. НАЧАЛО ДНЯ =====
   void decisions; // плановые решения применяются UI-действиями между днями (MVP)
   processDeliveries(restaurant, date);
+
+  // КАМПАНИИ: завершение по сроку (ТЗ §21.6). Раньше кампания жила вечно —
+  // «осталось 0 недель», но бейдж «Активна» и списание бюджета продолжались.
+  // Теперь при исчерпании срока помечаем endedWeek: деньги не списываются,
+  // а эффект затухает ~2 недели (см. demand.marketingFactor).
+  for (const c of restaurant.marketing.campaigns) {
+    if (c.endedWeek == null && date.week >= c.startWeek + c.durationWeeks) {
+      c.endedWeek = date.week;
+    }
+  }
+  // Полностью затухшие (2+ недели после конца) — удаляем из списка.
+  restaurant.marketing.campaigns = restaurant.marketing.campaigns.filter(
+    (c) => c.endedWeek == null || date.week - c.endedWeek < 2,
+  );
 
   // Автозаказ «завхоза» (ТЗ §12.5): нормальная доставка с лагом 1 день,
   // скоропорт ограничен сроком годности (анти-спираль порчи).
@@ -160,8 +177,10 @@ export function simulateDay(
   if (netRevenue > 0) {
     addTransaction(restaurant, date, 'sale', netRevenue, 'in', `Выручка за день: ${guests} гостей`);
   }
-  // Маркетинг: дневные расходы кампаний (ТЗ §21.2).
-  const marketingDaily = restaurant.marketing.campaigns.reduce((s, c) => s + c.weeklyBudget / 7, 0);
+  // Маркетинг: дневные расходы ТОЛЬКО активных кампаний (ТЗ §21.2).
+  const marketingDaily = restaurant.marketing.campaigns
+    .filter((c) => c.endedWeek == null)
+    .reduce((s, c) => s + c.weeklyBudget / 7, 0);
   if (marketingDaily > 0) {
     addTransaction(restaurant, date, 'marketing', Math.round(marketingDaily), 'out', 'Маркетинг: дневной бюджет');
   }
@@ -174,8 +193,10 @@ export function simulateDay(
   updateCleanliness(restaurant, guests);
   updateComfortAtmosphere(restaurant, monthOfDay(dayOfYear(date.week, date.day)));
   updateEquipmentWear(restaurant, totals.kitchenOverloadHours > 0 ? 1.2 : 0.7);
+  // Усталость: пофункциональные нагрузки (пик по «горячим» часам дня).
+  const roleLoads = buildRoleLoads(hourLogs);
+  updateFatigue(restaurant, date, roleLoads, DIFFICULTIES[draft.difficultyId]?.staffFatigueRate ?? 1);
   const avgStaffLoad = hours.length > 0 ? totals.staffLoadSum / hours.length : 0;
-  updateFatigue(restaurant, [{ load: avgStaffLoad }], DIFFICULTIES[draft.difficultyId]?.staffFatigueRate ?? 1);
 
   // Чаевые → мораль персонала (ТЗ §14.11).
   if (guests > 0) {
@@ -262,10 +283,34 @@ export function simulateDay(
   // ===== 7. ИНВАРИАНТЫ =====
   const invariantReport: InvariantReport = checkInvariants(draft);
 
-  // ===== 8. ПРОДВИЖЕНИЕ ВРЕМЕНИ =====
+  // ===== 8. ЖУРНАЛ ДНЯ И ПРОДВИЖЕНИЕ ВРЕМЕНИ =====
+  // Дневные транзакции фиксируем ДО закрытия недели (платежи недели — на день 6,
+  // час 23 — не должны попадать в отчёт конкретного дня).
+  const dayTransactions = restaurant.finance.transactions.filter(
+    (t) => dayIndex(t.date) === dayIndex(date),
+  );
+  draft.history.dayLogs.push({
+    date,
+    hourLogs,
+    kpi,
+    transactions: dayTransactions,
+    reviews,
+    events,
+    riskChanges,
+    warnings,
+  });
+  while (draft.history.dayLogs.length > 7) draft.history.dayLogs.shift();
+
   if (pendingCritical.length > 0) {
     draft.activeEvents.push(...pendingCritical);
-  } else if (draft.day >= 6) {
+    // Время всё равно идёт: день прожит, деньги двигались. Раньше критическое
+    // событие «замораживало» счётчик дня — повторная симуляция того же дня
+    // задваивала выручку. Диалог решения остаётся на паузе до выбора игрока.
+  }
+  if (draft.day >= 6) {
+    // Граница недели: закрытие финансов (зарплата/аренда/налоги/кредиты, BSC,
+    // weekStats) — теперь работает и при игре «по дням».
+    closeWeek(draft, seed);
     draft.day = 0;
     draft.week += 1;
   } else {
@@ -275,7 +320,7 @@ export function simulateDay(
   const result: DaySimulationResult = {
     date,
     hourLogs,
-    transactions: restaurant.finance.transactions.filter((t) => dayIndex(t.date) === dayIndex(date)),
+    transactions: dayTransactions,
     reviews,
     events,
     riskChanges,
@@ -286,4 +331,51 @@ export function simulateDay(
 
   draft.lastDayResult = result;
   return { result, state: draft };
+}
+
+/**
+ * Пофункциональные нагрузки за день для модели усталости (ТЗ §14.8):
+ *  - кухонные роли — ВЗВЕШЕННАЯ загрузка их станций (шеф-повар с весом 0.5
+ *    на горячем цехе не выгорает как чистый повар горячего);
+ *  - официанты — гостей на официанта;
+ *  - хостес/уборщики/посудомойщики — фактический поток против их пропускной
+ *    (посудомойщик с машиной — ~60 позиций/час, уборщик — ~45 посадок/час).
+ * Берём среднее по 3 busiest часам: одиночный пик не выжигает людей,
+ * но устойчивый перегруз обеда/ужина накапливает усталость.
+ */
+function buildRoleLoads(hourLogs: HourLog[]): Partial<Record<RoleId, number>> {
+  const loads: Partial<Record<RoleId, number>> = {};
+  const busy = hourLogs.filter((h) => h.seated >= 3);
+  const sample = busy.length >= 3 ? busy : hourLogs;
+  for (const roleId of ROLE_IDS) {
+    const cfg = STAFF_ROLES[roleId];
+    const stations = Object.keys(cfg.stationWeights) as StationType[];
+    if (roleId === 'waiter') {
+      loads[roleId] = peakOf(sample.map((h) => h.waiterLoad));
+    } else if (stations.length > 0) {
+      // Взвешенная загрузка: Σ(вес роли на станции × загрузка станции).
+      loads[roleId] = peakOf(
+        sample.map((h) =>
+          stations.reduce((s, st) => s + (cfg.stationWeights[st] ?? 0) * (h.stationLoads[st] ?? 0), 0),
+        ),
+      );
+    } else if (roleId === 'hostess') {
+      loads[roleId] = peakOf(sample.map((h) => h.seated / 45));
+    } else if (roleId === 'cleaner') {
+      loads[roleId] = peakOf(sample.map((h) => h.seated / 45));
+    } else if (roleId === 'dishwasher') {
+      // Посудомойщик с машиной: ~70 «посудных» позиций/час; посуда ≈ 55% позиций
+      // (напитки и кофе посуду почти не создают).
+      loads[roleId] = peakOf(sample.map((h) => (h.orders * 0.55) / 70));
+    }
+    // manager — организационная роль: её усталость задают смены (в updateFatigue).
+  }
+  return loads;
+}
+
+/** Среднее по топ-3 часам (пик без одноразовых выбросов). */
+function peakOf(values: number[]): number {
+  const sorted = values.filter((v) => v > 0).sort((a, b) => b - a);
+  const top = sorted.slice(0, 3);
+  return top.length > 0 ? top.reduce((s, v) => s + v, 0) / top.length : 0;
 }
