@@ -7,7 +7,8 @@
 import { useMemo, useState } from 'react';
 import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, KpiCard, WarningBanner, EmptyState, money, pct } from '../widgets';
-import { DISHES, DISHES_MAP, recipeFoodCost } from '@/lib/game/content/dishes';
+import { DISHES, recipeFoodCost } from '@/lib/game/content/dishes';
+import { dishOf, allDishes } from '@/lib/game/content/resolve';
 import { MENU_CATEGORIES, MENU_SIZE } from '@/lib/game/config/menu.config';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -32,6 +33,7 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { CsvMenuTools } from '../CsvMenuTools';
+import { CustomDishImport } from '../CustomDishImport';
 import {
   BookOpen,
   Plus,
@@ -59,13 +61,20 @@ export function MenuScreen() {
   const menuDishes = useMemo(
     () =>
       restaurant.menu.dishes
-        .map((id) => DISHES_MAP[id])
+        .map((id) => dishOf(restaurant.menu, id))
         .filter((d): d is Dish => !!d),
-    [restaurant.menu.dishes],
+    [restaurant.menu],
   );
+
+  const customCount = restaurant.menu.customDishes?.length ?? 0;
+  const libraryAll = useMemo(() => allDishes(restaurant.menu), [restaurant.menu]);
 
   const menuIds = useMemo(() => new Set(restaurant.menu.dishes), [restaurant.menu.dishes]);
   const stopIds = useMemo(() => new Set(restaurant.menu.stopList), [restaurant.menu.stopList]);
+  const customIds = useMemo(
+    () => new Set((restaurant.menu.customDishes ?? []).map((d) => d.id)),
+    [restaurant.menu.customDishes],
+  );
 
   const byCategory = useMemo(() => {
     const map = new Map<DishCategory, Dish[]>();
@@ -131,8 +140,8 @@ export function MenuScreen() {
         <KpiCard
           icon={ListOrdered}
           label="Библиотека блюд"
-          value={String(DISHES.length)}
-          sub={`можно добавить: ${DISHES.length - menuDishes.length}`}
+          value={String(libraryAll.length)}
+          sub={`можно добавить: ${libraryAll.length - menuDishes.length}${customCount > 0 ? ` · кастомных: ${customCount}` : ''}`}
         />
       </div>
 
@@ -145,6 +154,7 @@ export function MenuScreen() {
         right={
           <div className="flex flex-wrap items-center gap-1.5">
             <CsvMenuTools />
+            <CustomDishImport />
             <Dialog open={addOpen} onOpenChange={setAddOpen}>
               <DialogTrigger asChild>
                 <Button className="bg-amber-600 hover:bg-amber-700 text-white h-11" disabled={disabled}>
@@ -154,6 +164,7 @@ export function MenuScreen() {
               </DialogTrigger>
               <AddDishDialog
                 menuIds={menuIds}
+                dishes={libraryAll}
                 onAdd={(id) => toggleDish(id)}
                 onClose={() => setAddOpen(false)}
               />
@@ -183,6 +194,7 @@ export function MenuScreen() {
                   price={priceOf(d)}
                   stopListed={stopIds.has(d.id)}
                   licenseBlocked={!!d.requiresAlcoholLicense && !restaurant.licenses.alcohol?.active}
+                  custom={customIds.has(d.id)}
                   disabled={disabled}
                   onPrice={(p) => setPrice(d.id, p)}
                   onStop={() => stopListToggle(d.id)}
@@ -199,6 +211,7 @@ export function MenuScreen() {
                     price={priceOf(d)}
                     stopListed={stopIds.has(d.id)}
                     licenseBlocked={!!d.requiresAlcoholLicense && !restaurant.licenses.alcohol?.active}
+                    custom={customIds.has(d.id)}
                     disabled={disabled}
                     onPrice={(p) => setPrice(d.id, p)}
                     onStop={() => stopListToggle(d.id)}
@@ -220,6 +233,7 @@ function DishRow({
   price,
   stopListed,
   licenseBlocked,
+  custom,
   disabled,
   onPrice,
   onStop,
@@ -229,6 +243,7 @@ function DishRow({
   price: number;
   stopListed: boolean;
   licenseBlocked: boolean;
+  custom: boolean;
   disabled: boolean;
   onPrice: (price: number) => void;
   onStop: () => void;
@@ -248,6 +263,15 @@ function DishRow({
             {dish.name}
           </span>
           <FcBadge fc={fc} />
+          {custom && (
+            <Badge
+              variant="secondary"
+              className="bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-50"
+              title="Импортировано через CSV (ТЗ §35.3)"
+            >
+              импорт
+            </Badge>
+          )}
           {stopListed && (
             <Badge variant="secondary" className="bg-red-100 text-red-800 hover:bg-red-100">
               Стоп-лист
@@ -365,13 +389,15 @@ function PriceInput({
   );
 }
 
-/** Диалог добавления блюд из библиотеки. */
+/** Диалог добавления блюд из библиотеки (включая импортированные CSV). */
 function AddDishDialog({
   menuIds,
+  dishes,
   onAdd,
   onClose,
 }: {
   menuIds: Set<string>;
+  dishes: Dish[];
   onAdd: (dishId: string) => void;
   onClose: () => void;
 }) {
@@ -379,8 +405,8 @@ function AddDishDialog({
 
   const candidates = useMemo(
     () =>
-      DISHES.filter((d) => !menuIds.has(d.id) && (filter === 'all' || d.category === filter)),
-    [menuIds, filter],
+      dishes.filter((d) => !menuIds.has(d.id) && (filter === 'all' || d.category === filter)),
+    [menuIds, filter, dishes],
   );
 
   return (

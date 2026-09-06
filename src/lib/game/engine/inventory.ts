@@ -6,9 +6,9 @@
  * Обычная закупка: оплата сегодня → доставка завтра.
  * Срочная: оплата сегодня → доставка сегодня, цена +35% (в unitCost партии, без двойного учёта).
  */
-import type { GameDate, InventoryBatch, InventoryState, Restaurant } from '../types';
+import type { Dish, GameDate, InventoryBatch, InventoryState, Restaurant } from '../types';
 import { INGREDIENTS_MAP } from '../content/ingredients';
-import { DISHES_MAP } from '../content/dishes';
+import { dishOf } from '../content/resolve';
 import { STORAGE_LOSS_PER_DAY, THEFT, URGENT_PURCHASE_MARKUP } from '../config/finance.config';
 import { dayIndex } from './core';
 
@@ -53,8 +53,7 @@ export function consumeFifo(
 }
 
 /** Может ли кухня приготовить count порций блюда (все ингредиенты в наличии)? */
-export function canPrepare(state: InventoryState, dishId: string, count: number): boolean {
-  const dish = DISHES_MAP[dishId];
+export function canPrepare(state: InventoryState, dish: Dish, count: number): boolean {
   if (!dish) return false;
   for (const item of dish.recipe) {
     if (availableQuantity(state, item.ingredientId) < item.quantity * count * (1 + dish.prepWastePercent) - 0.0001) {
@@ -65,8 +64,7 @@ export function canPrepare(state: InventoryState, dishId: string, count: number)
 }
 
 /** Сколько порций блюда можно приготовить (по минимуму ингредиентов). */
-export function maxPortions(state: InventoryState, dishId: string): number {
-  const dish = DISHES_MAP[dishId];
+export function maxPortions(state: InventoryState, dish: Dish): number {
   if (!dish) return 0;
   let min = Infinity;
   for (const item of dish.recipe) {
@@ -77,9 +75,9 @@ export function maxPortions(state: InventoryState, dishId: string): number {
   return min === Infinity ? 0 : Math.max(0, min);
 }
 
-/** Списать ингредиенты на count порций. Возвращает COGS, ₽. */
-export function consumeForDish(state: InventoryState, dishId: string, count: number): number {
-  const dish = DISHES_MAP[dishId];
+/** Списать ингредиенты на count порций. Возвращает COGS, ₽.
+ *  Принимает объект блюда (кастомные блюда из состояния — см. content/resolve.ts). */
+export function consumeForDish(state: InventoryState, dish: Dish, count: number): number {
   if (!dish || count <= 0) return 0;
   let cost = 0;
   for (const item of dish.recipe) {
@@ -200,8 +198,8 @@ export function processEndOfDayLosses(
 export function estimateIngredientNeeds(restaurant: Restaurant, days: number, expectedGuestsPerDay: number): Record<string, number> {
   const needs: Record<string, number> = {};
   const dishes = restaurant.menu.dishes
-    .map((id) => DISHES_MAP[id])
-    .filter((d): d is NonNullable<typeof d> => Boolean(d));
+    .map((id) => dishOf(restaurant.menu, id))
+    .filter((d): d is Dish => Boolean(d));
   const totalPop = dishes.reduce((s, d) => s + d.basePopularity, 0) || 1;
   const ITEMS_PER_GUEST = 3.9 * 1.08; // позиции/гостя × лёгкий страховой запас
   for (const dish of dishes) {

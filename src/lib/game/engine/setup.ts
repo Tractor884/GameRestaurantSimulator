@@ -15,6 +15,7 @@ import type {
   StaffShifts,
   LoanState,
   GameEvent,
+  Dish,
 } from '../types';
 import { DIFFICULTIES } from '../config/difficulty.config';
 import { LOCATIONS_MAP, LOCATIONS } from '../config/locations.config';
@@ -29,6 +30,7 @@ import {
 import { STAFF_ROLES, ROLE_IDS } from '../config/staffRoles.config';
 import { INGREDIENTS_MAP } from '../content/ingredients';
 import { DISHES_MAP, STARTER_MENU_IDS } from '../content/dishes';
+import { dishOf } from '../content/resolve';
 import { annuityPayment, LOANS } from '../config/loans.config';
 import { placePurchase, buildAutoOrder } from './inventory';
 import { addTransaction, clamp } from './core';
@@ -131,6 +133,7 @@ export function createGame(opts: SetupOptions): GameState {
   const menuIds = opts.menuIds && opts.menuIds.length >= 12 ? opts.menuIds : STARTER_MENU_IDS;
   const prices: Record<string, number> = {};
   for (const id of menuIds) {
+    // createGame: меню стартует только из базового справочника (кастомных ещё нет).
     const dish = DISHES_MAP[id];
     if (dish) prices[id] = dish.recommendedPrice;
   }
@@ -148,7 +151,7 @@ export function createGame(opts: SetupOptions): GameState {
     rentMonthly,
     depositPaid: deposit,
     utilitiesMonthly,
-    menu: { dishes: [...menuIds], prices, stopList: [] },
+    menu: { dishes: [...menuIds], prices, stopList: [], customDishes: [] },
     inventory: { batches: [], pendingOrders: [] },
     staff: { pools: defaultPools(), schedule: defaultSchedule() },
     finance: {
@@ -192,6 +195,7 @@ export function createGame(opts: SetupOptions): GameState {
     phase: 'managing',
     status: 'open',
     difficultyId: diff.id,
+    options: { middayPause: true },
     restaurant,
     history: {
       dayLogs: [],
@@ -267,7 +271,7 @@ function dateNow(state: GameState): GameDate {
 
 export function toggleMenuDish(state: GameState, dishId: string): ActionResult {
   const r = state.restaurant!;
-  const dish = DISHES_MAP[dishId];
+  const dish = dishOf(r.menu, dishId);
   if (!dish) return { ok: false, message: 'Блюдо не найдено' };
   const idx = r.menu.dishes.indexOf(dishId);
   if (idx >= 0) {
@@ -281,7 +285,7 @@ export function toggleMenuDish(state: GameState, dishId: string): ActionResult {
 
 export function setDishPrice(state: GameState, dishId: string, price: number): ActionResult {
   const r = state.restaurant!;
-  const dish = DISHES_MAP[dishId];
+  const dish = dishOf(r.menu, dishId);
   if (!dish) return { ok: false, message: 'Блюдо не найдено' };
   if (price < dish.recommendedPrice * 0.5 || price > dish.recommendedPrice * 1.5) {
     return { ok: false, message: 'Цена вне допустимого диапазона (±50% от рекомендуемой)' };
@@ -299,6 +303,37 @@ export function toggleStopList(state: GameState, dishId: string): ActionResult {
   }
   r.menu.stopList.push(dishId);
   return { ok: true, message: 'Блюдо в стоп-листе' };
+}
+
+/** Импорт НОВЫХ блюд (ТЗ §35.3–35.4): кастомные блюда попадают в состояние
+ *  (menu.customDishes) и сразу включаются в меню по рекомендуемой цене.
+ *  Дубликаты среди кастомных — обновление (replace). */
+export function importCustomDishes(state: GameState, dishes: Dish[]): ActionResult {
+  const r = state.restaurant!;
+  if (dishes.length === 0) return { ok: false, message: 'Нет валидных блюд для импорта' };
+  if (!r.menu.customDishes) r.menu.customDishes = [];
+  let added = 0;
+  let updated = 0;
+  for (const dish of dishes) {
+    const idx = r.menu.customDishes.findIndex((d) => d.id === dish.id);
+    if (idx >= 0) {
+      r.menu.customDishes[idx] = dish;
+      updated++;
+    } else {
+      if (r.menu.customDishes.length >= 40) break; // лимит состояния
+      r.menu.customDishes.push(dish);
+      added++;
+      r.menu.dishes.push(dish.id);
+      if (!r.menu.prices[dish.id]) r.menu.prices[dish.id] = dish.recommendedPrice;
+    }
+  }
+  const parts: string[] = [];
+  if (added > 0) parts.push(`добавлено ${added}`);
+  if (updated > 0) parts.push(`обновлено ${updated}`);
+  return {
+    ok: added + updated > 0,
+    message: parts.length > 0 ? `Импорт блюд: ${parts.join(', ')}` : 'Лимит кастомных блюд (40) достигнут',
+  };
 }
 
 export function purchaseIngredients(

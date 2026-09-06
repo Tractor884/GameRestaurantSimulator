@@ -14,6 +14,7 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
+  Inbox,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -56,7 +57,7 @@ export function KpiCard({
   }[tone];
   const hintContent = resolveHint(hint, label);
   return (
-    <Card className="border-stone-200 bg-white shadow-sm hover:shadow transition-shadow">
+    <Card className="border-stone-200 bg-white shadow-sm hover:shadow-sm hover:border-stone-300 transition-all duration-200">
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
@@ -67,8 +68,8 @@ export function KpiCard({
             <p className={cn('text-xl font-bold tabular-nums mt-1', toneCls)}>{value}</p>
             {sub && <p className="text-xs text-stone-500 mt-0.5 truncate">{sub}</p>}
           </div>
-          <div className="rounded-lg bg-amber-50 p-2 shrink-0">
-            <Icon className="h-4 w-4 text-amber-700" aria-hidden />
+          <div className="rounded-lg bg-stone-50 p-2.5 shrink-0">
+            <Icon className="h-5 w-5 text-amber-700" aria-hidden />
           </div>
         </div>
         {typeof trend === 'number' && (
@@ -235,12 +236,11 @@ export function WarningBanner({ warnings }: { warnings: string[] }) {
   );
 }
 
+/** Пустое состояние: приглушённая иконка + центрированный текст. */
 export function EmptyState({ text }: { text: string }) {
   return (
-    <div className="flex flex-col items-center justify-center py-12 text-stone-400">
-      <div className="text-4xl mb-2" aria-hidden>
-        🍽️
-      </div>
+    <div className="flex flex-col items-center justify-center py-8 text-center text-stone-400 max-w-xs mx-auto">
+      <Inbox className="h-8 w-8 mb-2" aria-hidden />
       <p className="text-sm">{text}</p>
     </div>
   );

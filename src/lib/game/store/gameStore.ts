@@ -6,14 +6,18 @@
 'use client';
 
 import { create } from 'zustand';
-import type { GameState, PlayerAction } from '@/lib/game/types';
+import type { Dish, EmergencyActionId, GameState, MiddaySnapshot, PlayerAction } from '@/lib/game/types';
 import {
   createGame,
   simulateDay,
+  simulateDayUntilPause,
+  resumeDay,
+  applyEmergencyAction,
   simulateWeek,
   toggleMenuDish,
   setDishPrice,
   toggleStopList,
+  importCustomDishes,
   purchaseIngredients,
   hireStaff,
   fireStaff,
@@ -32,6 +36,7 @@ import {
   type SetupOptions,
   type ActionResult,
 } from '@/lib/game/engine';
+import type { DayRunContext } from '@/lib/game/engine';
 
 export type ScreenId =
   | 'restaurant'
@@ -62,21 +67,40 @@ export interface SaveMeta {
   cash: number;
 }
 
+/** Активная пауза «экстренных решений» (ТЗ §8.4–8.6): день наполовину прожит,
+ *  игрок применяет действия к оставшимся часам. Живёт ТОЛЬКО в памяти —
+ *  в сейвы не пишется (после F5 день детерминированно переигрывается). */
+export interface MiddayPause {
+  draft: GameState;
+  run: DayRunContext;
+  snapshot: MiddaySnapshot;
+  applied: EmergencyActionId[];
+}
+
 interface GameStore {
   state: GameState | null;
   screen: ScreenId;
   busy: boolean;
   lastToasts: { message: string; ok: boolean }[];
   setupDraft: Partial<SetupOptions> | null;
+  midday: MiddayPause | null;
 
   setScreen(screen: ScreenId): void;
   startGame(opts: SetupOptions): void;
   runDay(): void;
   runWeek(): void;
   apply(action: (state: GameState) => ActionResult): void;
+  /** Экстренные решения (§8.4): применить действие в паузе. */
+  applyEmergency(actionId: EmergencyActionId): void;
+  /** Доиграть день после паузы. */
+  continueMidday(): void;
+  /** Настройки геймплея (§8.4 пауза и др.). */
+  setOption(key: 'middayPause', value: boolean): void;
   // Действия игрока (обёртки).
   toggleDish(dishId: string): void;
   setPrice(dishId: string, price: number): void;
+  /** Импорт кастомных блюд CSV (§35.3–35.4). */
+  importDishes(dishes: Dish[]): void;
   stopListToggle(dishId: string): void;
   purchase(items: { ingredientId: string; quantity: number }[], urgent: boolean): void;
   autoOrder(days: number): void;
@@ -121,12 +145,13 @@ export const useGame = create<GameStore>((set, get) => ({
   lastToasts: [],
   setupDraft: null,
   finalSeen: false,
+  midday: null,
 
   setScreen: (screen) => set({ screen }),
 
   startGame: (opts) => {
     const state = createGame(opts);
-    set({ state, screen: 'restaurant', lastToasts: [{ message: `Ресторан «${opts.restaurantName}» открыт!`, ok: true }] });
+    set({ state, screen: 'restaurant', midday: null, lastToasts: [{ message: `Ресторан «${opts.restaurantName}» открыт!`, ok: true }] });
     persist(AUTOSAVE_KEY, state);
   },
 
@@ -134,8 +159,27 @@ export const useGame = create<GameStore>((set, get) => ({
     const s = get();
     if (!s.state || s.busy || s.state.phase === 'gameover') return;
     if (s.state.activeEvents.some((e) => !e.resolved)) return;
+    if (s.midday) return; // день на паузе — сначала завершите его
     set({ busy: true });
     try {
+      // Пауза «экстренных решений» (ТЗ §8.4): после обеденного пика движок
+      // оценивает проблемы; есть проблемы — диалог, нет — день доигрывается сразу.
+      if (s.state.options?.middayPause) {
+        const { midday, draft, run, finished } = simulateDayUntilPause(s.state, s.state.seed);
+        if (midday && run) {
+          set({ busy: false, midday: { draft, run, snapshot: midday, applied: [] } });
+          return;
+        }
+        // Проблем нет: draft — уже финализированное состояние.
+        set({ state: draft });
+        persist(AUTOSAVE_KEY, draft);
+        const toasts = [...(finished?.warnings ?? []).slice(0, 2).map((w) => ({ message: w, ok: false }))];
+        if (draft.activeEvents.some((e) => !e.resolved)) {
+          toasts.push({ message: '⚠️ Критическое событие! Требуется решение.', ok: false });
+        }
+        set({ busy: false, lastToasts: toasts });
+        return;
+      }
       const { state: newState } = simulateDay(s.state, { plannedActions: [] }, s.state.seed);
       set({ state: newState });
       persist(AUTOSAVE_KEY, newState);
@@ -147,6 +191,51 @@ export const useGame = create<GameStore>((set, get) => ({
     } catch (e) {
       set({ busy: false, lastToasts: [{ message: `Ошибка симуляции: ${String(e)}`, ok: false }] });
     }
+  },
+
+  applyEmergency: (actionId) => {
+    const s = get();
+    if (!s.midday) return;
+    const { draft, run, applied } = s.midday;
+    // draft/run — живые объекты в памяти; действия применяются к ним.
+    const res = applyEmergencyAction(draft, run, actionId);
+    if (res.ok) {
+      set({ midday: { ...s.midday, applied: [...applied, actionId], snapshot: { ...s.midday.snapshot } } });
+    }
+    set({ lastToasts: [...s.lastToasts.slice(-4), { message: res.message, ok: res.ok }] });
+  },
+
+  continueMidday: () => {
+    const s = get();
+    if (!s.midday || s.busy) return;
+    set({ busy: true });
+    try {
+      const { draft, run } = s.midday;
+      const { state: newState, result } = resumeDay(draft, run, s.state?.seed ?? 1);
+      set({ state: newState, midday: null });
+      persist(AUTOSAVE_KEY, newState);
+      const toasts: { message: string; ok: boolean }[] = [];
+      if (result.emergencyActions && result.emergencyActions.length > 0) {
+        toasts.push({ message: `День доигран. Экстренных мер: ${result.emergencyActions.length}`, ok: true });
+      }
+      toasts.push(...(result.warnings.slice(0, 2).map((w) => ({ message: w, ok: false }))));
+      if (newState.activeEvents.some((e) => !e.resolved)) {
+        toasts.push({ message: '⚠️ Критическое событие! Требуется решение.', ok: false });
+      }
+      set({ busy: false, lastToasts: toasts });
+    } catch (e) {
+      set({ busy: false, lastToasts: [{ message: `Ошибка симуляции: ${String(e)}`, ok: false }] });
+    }
+  },
+
+  setOption: (key, value) => {
+    const s = get();
+    if (!s.state || s.midday) return;
+    const draft = structuredClone(s.state);
+    if (!draft.options) draft.options = { middayPause: true };
+    draft.options[key] = value;
+    set({ state: draft });
+    persist(AUTOSAVE_KEY, draft);
   },
 
   runWeek: () => {
@@ -190,6 +279,7 @@ export const useGame = create<GameStore>((set, get) => ({
   apply: (action) => {
     const s = get();
     if (!s.state || s.state.phase === 'gameover') return;
+    if (s.midday) return; // день на паузе: остальные действия заблокированы до продолжения
     // Действия применяются к клоны и записываются назад.
     const draft = structuredClone(s.state);
     const res = action(draft);
@@ -199,6 +289,7 @@ export const useGame = create<GameStore>((set, get) => ({
 
   toggleDish: (dishId) => get().apply((st) => toggleMenuDish(st, dishId)),
   setPrice: (dishId, price) => get().apply((st) => setDishPrice(st, dishId, price)),
+  importDishes: (dishes) => get().apply((st) => importCustomDishes(st, dishes)),
   stopListToggle: (dishId) => get().apply((st) => toggleStopList(st, dishId)),
   purchase: (items, urgent) => get().apply((st) => purchaseIngredients(st, items, urgent)),
   autoOrder: (days) => get().apply((st) => autoOrderAction(st, days)),
@@ -233,7 +324,7 @@ export const useGame = create<GameStore>((set, get) => ({
     const data = JSON.parse(raw);
     const state = data.state ?? data;
     migrateState(state);
-    set({ state, screen: 'restaurant', finalSeen: false });
+    set({ state, screen: 'restaurant', finalSeen: false, midday: null });
     return true;
   },
 
@@ -271,7 +362,7 @@ export const useGame = create<GameStore>((set, get) => ({
       const state = (data.state ?? data) as GameState;
       if (!state.restaurant || !state.history) return false;
       migrateState(state);
-      set({ state, screen: 'restaurant', finalSeen: false });
+      set({ state, screen: 'restaurant', finalSeen: false, midday: null });
       return true;
     } catch {
       return false;
@@ -290,7 +381,7 @@ export const useGame = create<GameStore>((set, get) => ({
       const state: GameState = data.state ?? data;
       if (!state.restaurant || !state.history) return false;
       migrateState(state);
-      set({ state, screen: 'restaurant', finalSeen: false });
+      set({ state, screen: 'restaurant', finalSeen: false, midday: null });
       persist(AUTOSAVE_KEY, state);
       return true;
     } catch {
@@ -300,7 +391,7 @@ export const useGame = create<GameStore>((set, get) => ({
 
   resetGame: () => {
     localStorage.removeItem(AUTOSAVE_KEY);
-    set({ state: null, screen: 'restaurant', lastToasts: [], finalSeen: false });
+    set({ state: null, screen: 'restaurant', lastToasts: [], finalSeen: false, midday: null });
   },
 
   dismissToasts: () => set({ lastToasts: [] }),
@@ -311,9 +402,19 @@ export const useGame = create<GameStore>((set, get) => ({
 /** Миграция сейвов старых версий формата (ТЗ §32.4).
  *  v1 → v2: источник отзывов (sourceId), автозаказ.
  *  v2 → v3 (аудит): счётчики id в состоянии; priorReviews 35; weekStats
- *  старых сейвов без returningShare. */
+ *  старых сейвов без returningShare.
+ *  v3 → v4: настройки геймплея (options.middayPause) и кастомные блюда
+ *  меню (customDishes, CSV-импорт §35.3–35.4). */
 function migrateState(state: GameState): void {
   const r = state.restaurant;
+  // v4: настройки геймплея.
+  if (!state.options) state.options = { middayPause: true };
+  if (r) {
+    // v4: кастомные блюда (CSV-импорт новых блюд §35.3–35.4).
+    if (!r.menu.customDishes) r.menu.customDishes = [];
+    // Мусор от прерванной паузы не должен попадать в сейвы.
+    if (r.staff.callIns) r.staff.callIns = [];
+  }
   if (!r) return;
   if (!r.marketing.autoPurchase) {
     r.marketing.autoPurchase = { enabled: true, coverDays: 2 };

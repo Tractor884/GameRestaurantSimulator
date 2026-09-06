@@ -26,6 +26,7 @@ import type {
   GameEvent,
 } from '../types';
 import { FINANCE, TAXES } from '../config/finance.config';
+import { monthOfDay, dayOfYear } from '../config/demandProfiles.config';
 import { LOANS } from '../config/loans.config';
 import { LOSE_CONDITIONS, DIFFICULTIES, difficultyWin } from '../config/difficulty.config';
 import { EQUIPMENT_LEVELS, DEPRECIATION_MONTHS, ALCOHOL_LICENSE } from '../config/premises.config';
@@ -63,7 +64,14 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
 
   // Начисления периодических расходов (ТЗ §18.5).
   const rentAccrued = Math.round(restaurant.rentMonthly / 4);
-  const utilitiesAccrued = Math.round(restaurant.utilitiesMonthly / 4);
+  // СЕЗОННАЯ КОМПОНЕНТА КОММУНАЛЬНЫХ (дорожная карта §12.8): зимой отопление
+  // +25%, летом кондиционирование/вентиляция +15% — коммуналка перестаёт быть
+  // константой и сезонность P&L видна не только в выручке.
+  // Месяц берём по СЕРЕДИНЕ недели (день 3) — переход месяца внутри недели размывается.
+  const monthNow = monthOfDay(dayOfYear(week, 3));
+  const seasonalUtilK =
+    monthNow === 12 || monthNow <= 2 ? 1.25 : monthNow >= 6 && monthNow <= 8 ? 1.15 : 1.0;
+  const utilitiesAccrued = Math.round((restaurant.utilitiesMonthly * seasonalUtilK) / 4);
   const equipmentValue =
     restaurant.equipment.kitchen.value + restaurant.equipment.coffee.value + restaurant.equipment.hall.value;
   const depreciation = Math.round(equipmentValue / DEPRECIATION_MONTHS / 4);
@@ -112,7 +120,8 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   // Аренда и коммунальные: каждые 4 недели.
   if (week > 0 && week % 4 === 0) {
     addTransaction(restaurant, weekDate, 'rent', restaurant.rentMonthly, 'out', 'Аренда за месяц');
-    addTransaction(restaurant, weekDate, 'utilities', restaurant.utilitiesMonthly, 'out', 'Коммунальные за месяц');
+    const utilSeasonNote = seasonalUtilK > 1 ? (seasonalUtilK >= 1.25 ? 'Коммунальные за месяц (зима, отопление +25%)' : 'Коммунальные за месяц (лето, вентиляция +15%)') : 'Коммунальные за месяц';
+    addTransaction(restaurant, weekDate, 'utilities', Math.round(restaurant.utilitiesMonthly * seasonalUtilK), 'out', utilSeasonNote);
   }
 
   // Налоги: каждые 4 недели по накопленной базе (ТЗ §18.7).

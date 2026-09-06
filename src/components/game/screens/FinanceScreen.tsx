@@ -30,6 +30,7 @@ import type { FinancialTransaction, TransactionType } from '@/lib/game/types';
 const TX_LABELS: Record<TransactionType, string> = {
   sale: 'Продажи',
   purchase: 'Закупка',
+  emergency: 'Экстренные меры',
   payroll: 'Зарплата',
   social_contribution: 'Взносы',
   rent: 'Аренда',

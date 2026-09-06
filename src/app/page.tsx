@@ -32,7 +32,7 @@ export default function Page() {
   return (
     <div className="min-h-screen bg-stone-50 flex flex-col">
       {state ? <GameShell /> : <SetupWizard />}
-      <Toaster position="bottom-right" richColors />
+      <Toaster position="bottom-right" richColors duration={3500} />
     </div>
   );
 }

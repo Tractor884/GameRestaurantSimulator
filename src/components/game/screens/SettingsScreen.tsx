@@ -1,6 +1,6 @@
 /**
  * Экран «Настройки и сейвы» (ТЗ §32): 3 слота сохранений, экспорт/импорт
- * JSON, новая игра, справка.
+ * JSON, настройки геймплея (пауза экстренных решений §8.4), новая игра, справка.
  */
 'use client';
 
@@ -11,6 +11,7 @@ import { difficultyWin as winOf, difficultyOf as diffOf } from '@/lib/game/confi
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -32,6 +33,7 @@ import {
   BookOpen,
   CheckCircle2,
   AlertTriangle,
+  Siren,
 } from 'lucide-react';
 
 export function SettingsScreen() {
@@ -43,6 +45,8 @@ export function SettingsScreen() {
   const exportSave = useGame((s) => s.exportSave);
   const importSave = useGame((s) => s.importSave);
   const resetGame = useGame((s) => s.resetGame);
+  const setOption = useGame((s) => s.setOption);
+  const middayPause = state.options?.middayPause ?? true;
 
   const [refresh, setRefresh] = useState(0);
   const [importError, setImportError] = useState<string | null>(null);
@@ -134,6 +138,27 @@ export function SettingsScreen() {
             {importError}
           </div>
         )}
+      </SectionCard>
+
+      {/* Геймплей */}
+      <SectionCard title="Геймплей" icon={Siren}>
+        <div className="flex items-start justify-between gap-4 py-1">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-stone-800">Пауза «экстренных решений» (ТЗ §8.4)</p>
+            <p className="text-xs text-stone-500 mt-0.5">
+              После обеденного пика (15:00) день встаёт на паузу, если движок нашёл проблемы:
+              очередь, перегруз кухни, стоп-листы, грязь, поломка. Выбираете экстренные меры —
+              вызов персонала, скидка, срочная закупка… — и день доигрывается.
+              Здоровый ресторан не прерывается.
+            </p>
+          </div>
+          <Switch
+            checked={middayPause}
+            onCheckedChange={(v) => setOption('middayPause', v)}
+            aria-label="Пауза экстренных решений после обеда"
+            className="data-[state=checked]:bg-amber-600"
+          />
+        </div>
       </SectionCard>
 
       {/* Новая игра */}

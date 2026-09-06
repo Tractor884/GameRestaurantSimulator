@@ -11,7 +11,7 @@
  */
 import type { Dish, GameDate, HourLog, Restaurant, SegmentId, StationType, GameState } from '../types';
 import { SEGMENTS, SEGMENT_IDS } from '../config/segments.config';
-import { DISHES_MAP } from '../content/dishes';
+import { dishOf } from '../content/resolve';
 import { MENU_CATEGORIES } from '../config/menu.config';
 import { QUEUE_CONFIG, dayPeriod } from '../config/queue.config';
 import { SATISFACTION } from '../config/satisfaction.config';
@@ -175,7 +175,7 @@ function generateOrders(
   // Доступные блюда: меню − стоп-лист − лицензия − сезон (ТЗ §10.7).
   const month = monthOfDate(date);
   const availableDishes: Dish[] = restaurant.menu.dishes
-    .map((id) => DISHES_MAP[id])
+    .map((id) => dishOf(restaurant.menu, id))
     .filter((d): d is Dish => Boolean(d))
     .filter((d) => !restaurant.menu.stopList.includes(d.id))
     .filter((d) => !d.requiresAlcoholLicense || alcoholOk)
@@ -204,7 +204,7 @@ function generateOrders(
       const weights = dishesInCat.map((d) => {
         const price = restaurant.menu.prices[d.id] ?? d.recommendedPrice;
         const priceFactor = Math.pow(d.recommendedPrice / Math.max(1, price), elasticity);
-        const available = maxPortions(restaurant.inventory, d.id) > 0 ? 1 : 0;
+        const available = maxPortions(restaurant.inventory, d) > 0 ? 1 : 0;
         return Math.max(0, d.basePopularity * priceFactor * available * (d.baseQuality / 80));
       });
       const totalWeight = weights.reduce((s, w) => s + w, 0);
@@ -255,7 +255,7 @@ function generateOrders(
     if (portionsActual <= 0) continue;
     const price = restaurant.menu.prices[p.dish.id] ?? p.dish.recommendedPrice;
     result.revenue += price * portionsActual;
-    result.cogs += consumeForDish(restaurant.inventory, p.dish.id, portionsActual);
+    result.cogs += consumeForDish(restaurant.inventory, p.dish, portionsActual);
     result.itemsSold += portionsActual;
     result.dishesSold[p.dish.id] = (result.dishesSold[p.dish.id] ?? 0) + portionsActual;
     qualitySum += p.dish.baseQuality * portionsActual;

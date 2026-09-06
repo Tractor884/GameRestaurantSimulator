@@ -105,6 +105,7 @@ export type LocationType =
 export type TransactionType =
   | 'sale'
   | 'purchase'
+  | 'emergency'
   | 'payroll'
   | 'social_contribution'
   | 'rent'
@@ -161,6 +162,9 @@ export interface MenuState {
   dishes: string[]; // id включённых блюд
   prices: Record<string, number>; // текущая цена продажи, ₽
   stopList: string[]; // стоп-лист
+  /** Кастомные блюда (CSV-импорт ТЗ §35.3–35.4). Живут в состоянии —
+   *  доступны всем системам движка и переживают сейв/загрузку. */
+  customDishes: Dish[];
 }
 
 export interface InventoryBatch {
@@ -203,6 +207,10 @@ export interface StaffState {
   pools: Record<RoleId, StaffPool>;
   /** График: роль → день недели (0..6) → смены. */
   schedule: Record<RoleId, StaffShifts[]>;
+  /** Временный вызов персонала «на сегодня» (экстренное решение ТЗ §8.4).
+   *  Живёт только внутри симулируемого дня — очищается при финализации дня
+   *  и не попадает в сейвы. */
+  callIns?: { day: number; roleId: RoleId; count: number }[];
 }
 
 export interface MarketingCampaign {
@@ -572,6 +580,60 @@ export interface DayDecisions {
   plannedActions: PlayerAction[];
 }
 
+/* ====================== ЭКСТРЕННЫЕ РЕШЕНИЯ ВНУТРИ ДНЯ (ТЗ §8.4–8.6) ====================== */
+
+/** Идентификаторы экстренных действий (ТЗ §8.4, дорожная карта §12.5). */
+export type EmergencyActionId =
+  | 'call_extra_staff' // вызов дополнительного персонала на вечер
+  | 'queue_compensation' // компенсация ожидающим в очереди
+  | 'evening_discount' // экстренная скидка на вечер
+  | 'urgent_purchase' // срочная закупка недостающих ингредиентов
+  | 'simplify_menu' // стоп-лист сложных блюд на вечер
+  | 'express_sanitation' // экспресс-санобработка зала
+  | 'urgent_repair'; // срочный ремонт оборудования
+
+/** Проблема, обнаруженная в обеденный пик (мотивирует паузу). */
+export interface MiddayProblem {
+  id: 'queue' | 'kitchen' | 'stockout' | 'service' | 'cash' | 'sanitary' | 'equipment';
+  title: string;
+  detail: string;
+  severity: 'high' | 'medium';
+}
+
+/** Карточка экстренного решения (ТЗ §8.6: название, стоимость, время, описание, последствия, риск). */
+export interface EmergencyOption {
+  id: EmergencyActionId;
+  title: string;
+  icon: string; // имя иконки lucide для UI
+  cost: number; // ₽, оценивается на момент паузы
+  time: string; // когда вступает в силу
+  description: string;
+  consequences: string[]; // ориентировочные последствия
+  riskNote: string; // диапазон риска
+  targets: MiddayProblem['id'][]; // какие проблемы лечит
+}
+
+/** Снимок дня на паузе (после обеденного пика, до ужина). */
+export interface MiddaySnapshot {
+  hour: number; // час паузы (например 16)
+  guests: number; // гостей обслужено к паузе
+  lostGuests: number;
+  queueNow: number; // гостей в очереди сейчас
+  revenueSoFar: number; // ₽
+  satisfactionSoFar: number; // 0..100
+  stationPeak: { station: StationType; load: number }[]; // топ-2 загрузки станций
+  stopListHits: number;
+  cash: number;
+  problems: MiddayProblem[];
+  options: EmergencyOption[];
+}
+
+/** Пользовательские настройки геймплея (переживают сейв). */
+export interface GameOptions {
+  /** Пауза «экстренных решений» после обеденного пика (ТЗ §8.4–8.6). */
+  middayPause: boolean;
+}
+
 /* ============================= РЕЗУЛЬТАТЫ СИМУЛЯЦИИ ============================= */
 
 export interface DaySimulationResult {
@@ -584,6 +646,8 @@ export interface DaySimulationResult {
   kpi: DayKPI;
   warnings: string[];
   invariantReport: InvariantReport;
+  /** Экстренные решения, применённые в течение этого дня (пауза §8.4). */
+  emergencyActions?: EmergencyActionId[];
 }
 
 export interface InvariantReport {
@@ -626,6 +690,8 @@ export interface GameState {
   phase: GamePhase;
   status: GameStatus;
   difficultyId: string;
+  /** Пользовательские настройки геймплея (мигрируются: v4). */
+  options: GameOptions;
   restaurant: Restaurant | null;
   history: HistoryState;
   activeEvents: GameEvent[];

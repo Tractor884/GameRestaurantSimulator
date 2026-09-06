@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useGame } from '@/lib/game/store/gameStore';
 import { KpiCard, SectionCard, WarningBanner, ScoreBar, RangeBadge, money, moneyShort, EmptyState } from '../widgets';
 import { InfoHint } from '../hints';
-import { DISHES_MAP } from '@/lib/game/content/dishes';
+import { dishOf } from '@/lib/game/content/resolve';
 import { DAYS_RU } from '@/lib/game/engine';
 import { HallScene } from '../HallScene';
 import { TutorialCoach } from '../TutorialCoach';
@@ -176,7 +176,7 @@ export function RestaurantScreen() {
                   <div className="space-y-1">
                     {topDishes.map((d) => (
                       <div key={d.dishId} className="flex items-center justify-between text-sm py-1 border-b border-stone-100 last:border-0">
-                        <span className="text-stone-700 truncate">{DISHES_MAP[d.dishId]?.name ?? d.dishId}</span>
+                        <span className="text-stone-700 truncate">{dishOf(restaurant.menu, d.dishId)?.name ?? d.dishId}</span>
                         <span className="tabular-nums font-semibold text-stone-800">×{d.count}</span>
                       </div>
                     ))}

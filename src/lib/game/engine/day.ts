@@ -2,6 +2,13 @@
  * СИМУЛЯЦИЯ ДНЯ (ТЗ §7, §28).
  * Порядок: плановые решения → доставки → почасовой цикл → конец дня.
  * Функция чистая: входное состояние не мутируется (клон через structuredClone).
+ *
+ * АРХИТЕКТУРА ПАУЗЫ «ЭКСТРЕННЫХ РЕШЕНИЙ» (ТЗ §8.4–8.6, дорожная карта §12.5):
+ *   День = startDayRun → runHoursUntil → finishDay.
+ *   simulateDay() гонит все три фазы подряд (поведение ИДЕНТИЧНО прежнему —
+ *   rng-потоки и порядок операций не менялись; эталоны калибровки 2.0 живы).
+ *   Экстренная пауза (emergency.ts) останавливает runHoursUntil ПОСЛЕ обеденного
+ *   пика: игрок применяет решения, затем resumeDay доигрывает вечер и финализирует.
  */
 import type {
   DayKPI,
@@ -15,18 +22,21 @@ import type {
   RiskChange,
   SegmentId,
   GameEvent,
+  EmergencyActionId,
+  StationType,
 } from '../types';
-import { deriveRng, hashSeed } from '../rng';
+import { deriveRng, hashSeed, type Rng } from '../rng';
 import { SEGMENT_IDS } from '../config/segments.config';
 import { FINANCE } from '../config/finance.config';
 import { DIFFICULTIES } from '../config/difficulty.config';
 import { LOCATIONS_MAP } from '../config/locations.config';
 import { monthOfDay, dayOfYear } from '../config/demandProfiles.config';
 import { STAFF_ROLES, ROLE_IDS } from '../config/staffRoles.config';
-import type { RoleId, StationType } from '../types';
+import type { RoleId } from '../types';
 import { cloneState, addTransaction, workingHours, dayIndex, clamp } from './core';
 import { hourlyDemand, emptyReturning } from './demand';
-import { DISHES_MAP, recipeCost } from '../content/dishes';
+import { dishOf } from '../content/resolve';
+import { recipeCost } from '../content/dishes';
 import { simulateHour, type QueueEntry } from './hour';
 import { processDeliveries, processEndOfDayLosses, buildAutoOrder, placePurchase } from './inventory';
 import { accruePayrollDay, updateFatigue, averageFatigue, dayCoverage } from './staff';
@@ -46,24 +56,108 @@ import {
 } from './endday';
 import { checkInvariants } from './invariants';
 
+/** Накопители дня (двигаются по часам; при паузе — замораживаются в контексте). */
+export interface DayTotals {
+  revenue: number;
+  cogs: number;
+  guests: number;
+  lost: number;
+  tips: number;
+  satisfactionWeighted: number;
+  satisfactionCount: number;
+  dishesSold: Record<string, number>;
+  stopListHits: number;
+  seatedBySegment: Record<SegmentId, number>;
+  kitchenOverloadHours: number;
+  staffLoadSum: number;
+  /** Позиций продано (для относительных порогов: стоп-листы к объёму). */
+  orders: number;
+  // ТЕЛЕМЕТРИЯ (аудит): выручка/себестоимость по категориям + возвратный трафик.
+  categoryRevenue: Partial<Record<import('../types').DishCategory, number>>;
+  categoryCogs: Partial<Record<import('../types').DishCategory, number>>;
+  returningGuests: number;
+}
+
+/** Контекст «бегущего» дня. Живёт в памяти сторы во время паузы (НЕ в сейвах:
+ *  после перезагрузки страницы день детерминированно переигрывается с начала). */
+export interface DayRunContext {
+  date: GameDate;
+  hours: number[];
+  hourIndex: number; // индекс следующего часа к симуляции
+  hourLogs: HourLog[];
+  queue: QueueEntry[];
+  seatsBusy: number;
+  totals: DayTotals;
+  returningDay: Record<SegmentId, number>;
+  rngs: { demand: Rng; orders: Rng; reviews: Rng; events: Rng };
+  /** Модификаторы экстренных решений (§8.4): применяются к ОСТАВШИМСЯ часам. */
+  emergency: {
+    applied: EmergencyActionId[];
+    demandLift: number; // множитель нового спроса (walk-ins)
+    discount: number; // скидка на оставшиеся часы (доля); цены масштабируются и восстанавливаются
+    satisfactionBonus: number; // добавка к удовлетворённости оставшихся часов
+    tempStopList: string[]; // «сложные» блюда, скрытые до конца дня
+  };
+}
+
+function emptyTotals(): DayTotals {
+  return {
+    revenue: 0,
+    cogs: 0,
+    guests: 0,
+    lost: 0,
+    tips: 0,
+    satisfactionWeighted: 0,
+    satisfactionCount: 0,
+    dishesSold: {},
+    stopListHits: 0,
+    seatedBySegment: { ...emptyReturning() } as Record<SegmentId, number>,
+    kitchenOverloadHours: 0,
+    staffLoadSum: 0,
+    orders: 0,
+    categoryRevenue: {},
+    categoryCogs: {},
+    returningGuests: 0,
+  };
+}
+
 export function simulateDay(
   state: GameState,
   decisions: DayDecisions,
   seed: number,
 ): { result: DaySimulationResult; state: GameState } {
+  void decisions; // плановые решения применяются UI-действиями между днями (MVP)
+  const { draft, run } = startDayRun(state, seed);
+  runHoursUntil(draft, run);
+  return finishDay(draft, run, seed);
+}
+
+/** ФАЗА 1. Начало дня: доставки, кампании, автозаказ, возвратный спрос. */
+export function startDayRun(state: GameState, seed: number): { draft: GameState; run: DayRunContext } {
   const draft = cloneState(state);
   const restaurant = draft.restaurant;
-  if (!restaurant) throw new Error('simulateDay: ресторан не создан');
+  if (!restaurant) throw new Error('startDayRun: ресторан не создан');
 
   const date: GameDate = { week: draft.week, day: draft.day, hour: restaurant.openHours.start };
   const daySeed = hashSeed(seed, draft.week, draft.day);
-  const demandRng = deriveRng(daySeed, 'demand');
-  const ordersRng = deriveRng(daySeed, 'orders');
-  const reviewsRng = deriveRng(daySeed, 'reviews');
-  const eventsRng = deriveRng(daySeed, 'events');
+  const run: DayRunContext = {
+    date,
+    hours: workingHours(restaurant, date.day),
+    hourIndex: 0,
+    hourLogs: [],
+    queue: [],
+    seatsBusy: 0,
+    totals: emptyTotals(),
+    returningDay: returningDemandForDay(restaurant, date),
+    rngs: {
+      demand: deriveRng(daySeed, 'demand'),
+      orders: deriveRng(daySeed, 'orders'),
+      reviews: deriveRng(daySeed, 'reviews'),
+      events: deriveRng(daySeed, 'events'),
+    },
+    emergency: { applied: [], demandLift: 1, discount: 0, satisfactionBonus: 0, tempStopList: [] },
+  };
 
-  // ===== 1. НАЧАЛО ДНЯ =====
-  void decisions; // плановые решения применяются UI-действиями между днями (MVP)
   processDeliveries(restaurant, date);
 
   // КАМПАНИИ: завершение по сроку (ТЗ §21.6). Раньше кампания жила вечно —
@@ -104,40 +198,32 @@ export function simulateDay(
     }
   }
 
-  // Возвратный спрос дня (по сегментам), распределится по часам.
-  const returningDay = returningDemandForDay(restaurant, date);
+  return { draft, run };
+}
 
-  // ===== 2. ПОЧАСОВОЙ ЦЕПЬ =====
-  const hours = workingHours(restaurant, date.day);
-  const hourLogs: HourLog[] = [];
-  const queue: QueueEntry[] = [];
-  let seatsBusy = 0;
-  const totals = {
-    revenue: 0,
-    cogs: 0,
-    guests: 0,
-    lost: 0,
-    tips: 0,
-    satisfactionWeighted: 0,
-    satisfactionCount: 0,
-    dishesSold: {} as Record<string, number>,
-    stopListHits: 0,
-    seatedBySegment: { ...emptyReturning() } as Record<SegmentId, number>,
-    kitchenOverloadHours: 0,
-    staffLoadSum: 0,
-    // ТЕЛЕМЕТРИЯ (аудит): выручка/себестоимость по категориям + возвратный трафик.
-    categoryRevenue: {} as Partial<Record<import('../types').DishCategory, number>>,
-    categoryCogs: {} as Partial<Record<import('../types').DishCategory, number>>,
-    returningGuests: 0,
-  };
+/** ФАЗА 2. Почасовой цикл. stopBeforeHour: симулировать часы [текущий, stopBefore)
+ *  — для экстренной паузы после обеденного пика. */
+export function runHoursUntil(draft: GameState, run: DayRunContext, stopBeforeHour?: number): void {
+  const restaurant = draft.restaurant;
+  if (!restaurant) throw new Error('runHoursUntil: ресторан не создан');
+  const { date, totals, rngs, emergency } = run;
 
-  for (const hour of hours) {
-    const demand = hourlyDemand(draft, restaurant, { ...date, hour }, hour, demandRng);
+  while (run.hourIndex < run.hours.length) {
+    const hour = run.hours[run.hourIndex];
+    if (stopBeforeHour != null && hour >= stopBeforeHour) break;
+
+    const demand = hourlyDemand(draft, restaurant, { ...date, hour }, hour, rngs.demand);
     // Возвратный спрос распределяем по часам по предпочтениям сегмента.
     const returningHour = { ...emptyReturning() } as Record<SegmentId, number>;
     for (const segId of SEGMENT_IDS) {
       const share = returningShareForHour(segId, hour);
-      returningHour[segId] = (returningDay[segId] ?? 0) * share;
+      returningHour[segId] = (run.returningDay[segId] ?? 0) * share;
+    }
+
+    // ЭКСТРЕННАЯ СКИДКА (§8.4): вечерний трафик живее (walk-ins),
+    // возвратные когорты не масштабируем — они уже «придут» своей памятью.
+    if (emergency.demandLift !== 1) {
+      for (const segId of SEGMENT_IDS) demand.newDemand[segId] *= emergency.demandLift;
     }
 
     const hourResult = simulateHour(
@@ -146,35 +232,39 @@ export function simulateDay(
       { ...date, hour },
       hour,
       { newDemand: demand.newDemand, returning: returningHour },
-      queue,
-      seatsBusy,
-      ordersRng,
+      run.queue,
+      run.seatsBusy,
+      rngs.orders,
     );
-    seatsBusy = hourResult.seatsBusy;
-    hourLogs.push(hourResult.hourLog);
+    run.seatsBusy = hourResult.seatsBusy;
+    run.hourIndex += 1;
 
+    // КОМПЕНСАЦИЯ ОЖИДАЮЩИМ (§8.4): напиток за ожидание — мягкая
+    // добавка к удовлетворённости оставшихся часов.
+    if (emergency.satisfactionBonus > 0) {
+      hourResult.satisfaction = clamp(hourResult.satisfaction + emergency.satisfactionBonus, 0, 100);
+      hourResult.hourLog.satisfaction = Math.round(hourResult.satisfaction);
+    }
+
+    run.hourLogs.push(hourResult.hourLog);
     totals.revenue += hourResult.revenue;
     totals.cogs += hourResult.cogs;
     totals.guests += hourResult.hourLog.seated;
     totals.lost += hourResult.lostGuests;
     totals.tips += hourResult.tips;
+    totals.orders += hourResult.hourLog.orders;
     totals.satisfactionWeighted += hourResult.satisfaction * hourResult.hourLog.seated;
     totals.satisfactionCount += hourResult.hourLog.seated;
     totals.stopListHits += hourResult.stopListHits;
-    totals.returningGuests += SEGMENT_IDS.reduce(
-      (s, k) => s + (returningHour[k] ?? 0),
-      0,
-    );
+    totals.returningGuests += SEGMENT_IDS.reduce((s, k) => s + (returningHour[k] ?? 0), 0);
     for (const [dishId, count] of Object.entries(hourResult.dishesSold)) {
       totals.dishesSold[dishId] = (totals.dishesSold[dishId] ?? 0) + count;
-      const dish = DISHES_MAP[dishId];
+      const dish = dishOf(restaurant.menu, dishId);
       if (dish) {
         const price = restaurant.menu.prices[dishId] ?? dish.recommendedPrice;
-        totals.categoryRevenue[dish.category] =
-          (totals.categoryRevenue[dish.category] ?? 0) + price * count;
+        totals.categoryRevenue[dish.category] = (totals.categoryRevenue[dish.category] ?? 0) + price * count;
         // Оценка себестоимости по техкарте (≈ FIFO-цена закупки).
-        totals.categoryCogs[dish.category] =
-          (totals.categoryCogs[dish.category] ?? 0) + recipeCost(dish) * count;
+        totals.categoryCogs[dish.category] = (totals.categoryCogs[dish.category] ?? 0) + recipeCost(dish) * count;
       }
     }
     for (const segId of SEGMENT_IDS) totals.seatedBySegment[segId] += hourResult.seated[segId] ?? 0;
@@ -185,9 +275,33 @@ export function simulateDay(
       ...Object.values(hourResult.hourLog.stationLoads).map((v) => v ?? 0),
     );
   }
+}
 
+/** ФАЗА 3. Конец дня: финансы, отзывы, риски, события, KPI, журнал, время.
+ *  Возвращает финальное состояние и отчёт; ОДНОКРАТНО двигает время (день/неделя).
+ *  Снимает временные модификаторы экстренных решений (цены/стоп-лист/вызовы). */
+export function finishDay(
+  draft: GameState,
+  run: DayRunContext,
+  seed: number,
+): { result: DaySimulationResult; state: GameState } {
+  const restaurant = draft.restaurant;
+  if (!restaurant) throw new Error('finishDay: ресторан не создан');
+  const { date, totals, hourLogs, emergency, rngs } = run;
   const guests = Math.round(totals.guests);
   const satisfaction = totals.satisfactionCount > 0 ? totals.satisfactionWeighted / totals.satisfactionCount : 0;
+
+  // — Снять временные модификаторы экстренных решений (только на сегодня) —
+  if (emergency.discount > 0) {
+    const k = 1 - emergency.discount;
+    for (const id of Object.keys(restaurant.menu.prices)) {
+      restaurant.menu.prices[id] = Math.round(restaurant.menu.prices[id] / k);
+    }
+  }
+  if (emergency.tempStopList.length > 0) {
+    restaurant.menu.stopList = restaurant.menu.stopList.filter((id) => !emergency.tempStopList.includes(id));
+  }
+  restaurant.staff.callIns = [];
 
   // ===== 3. ФИНАНСЫ ДНЯ =====
   // Выручка: валовая в P&L; в кассу — минус эквайринг (ТЗ §18.3).
@@ -214,7 +328,7 @@ export function simulateDay(
   // Усталость: пофункциональные нагрузки (пик по «горячим» часам дня).
   const roleLoads = buildRoleLoads(hourLogs);
   updateFatigue(restaurant, date, roleLoads, DIFFICULTIES[draft.difficultyId]?.staffFatigueRate ?? 1);
-  const avgStaffLoad = hours.length > 0 ? totals.staffLoadSum / hours.length : 0;
+  const avgStaffLoad = run.hours.length > 0 ? totals.staffLoadSum / run.hours.length : 0;
 
   // Чаевые → мораль персонала (ТЗ §14.11).
   if (guests > 0) {
@@ -227,7 +341,7 @@ export function simulateDay(
 
   // Отзывы и рейтинг (ТЗ §16). reputationSpeed — множитель сложности (ТЗ §36):
   // у «Профессионала» рейтинг живее реагирует на свежие отзывы (§6.8 паспорта).
-  const reviews: Review[] = generateReviews(restaurant, date, totals.seatedBySegment, satisfaction, reviewsRng);
+  const reviews: Review[] = generateReviews(restaurant, date, totals.seatedBySegment, satisfaction, rngs.reviews);
   addReviews(restaurant, reviews, date, DIFFICULTIES[draft.difficultyId]?.reputationSpeed ?? 1);
 
   // Возвратные когорты (ТЗ §17).
@@ -246,7 +360,7 @@ export function simulateDay(
   });
 
   // События (ТЗ §20): некритические применяются сразу, критические — на паузу.
-  const events: GameEvent[] = checkEvents(draft, restaurant, date, eventsRng);
+  const events: GameEvent[] = checkEvents(draft, restaurant, date, rngs.events);
   const pendingCritical: GameEvent[] = [];
   for (const event of events) {
     if (event.criticality === 'critical') {
@@ -354,6 +468,7 @@ export function simulateDay(
     kpi,
     warnings,
     invariantReport,
+    emergencyActions: emergency.applied.length > 0 ? [...emergency.applied] : undefined,
   };
 
   draft.lastDayResult = result;

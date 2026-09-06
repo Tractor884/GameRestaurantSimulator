@@ -31,9 +31,17 @@ export function staffOnDuty(staff: StaffState, roleId: RoleId, day: number, hour
 /** Эффективный (фактически работающий) персонал роли в час. */
 export function effectiveStaff(staff: StaffState, roleId: RoleId, day: number, hour: number): number {
   const scheduled = staffOnDuty(staff, roleId, day, hour);
+  // ЭКСТРЕННЫЙ ВЫЗОВ «на сегодня» (ТЗ §8.4): внешний temps добавляется
+  // ПОВЕРХ графика и не ограничен пулом (приходит со стороны, КПД 0.95).
+  // Поле живёт только внутри симулируемого дня (очищается в finishDay).
+  let callIns = 0;
+  for (const ci of staff.callIns ?? []) {
+    if (ci.day === day && ci.roleId === roleId && hour >= 15) callIns += ci.count;
+  }
+  if (scheduled <= 0 && callIns > 0) return callIns * 0.95;
   if (scheduled <= 0) return 0;
   const pool = staff.pools[roleId];
-  if (!pool || pool.count <= 0) return 0;
+  if (!pool || pool.count <= 0) return callIns > 0 ? callIns * 0.95 : 0;
   // На смену выходит не больше, чем есть людей в пуле.
   const attendance = 1 - STAFF_DYNAMICS.absenceProbability;
   // Адаптация новичков: newHires — счётчик неадаптированных, тает на 1/день.
@@ -46,7 +54,7 @@ export function effectiveStaff(staff: StaffState, roleId: RoleId, day: number, h
   const fatigueFactor = 1 - 0.15 * Math.max(0, pool.fatigue - 50) / 50;
   // Выходит min(запланировано, численность пула) × доступность.
   const onShift = Math.min(scheduled, pool.count);
-  return Math.max(0, onShift * attendance * adaptation * fatigueFactor);
+  return Math.max(0, onShift * attendance * adaptation * fatigueFactor) + callIns * 0.95;
 }
 
 /** Организационный множитель смены: управляющий/шеф на смене. */

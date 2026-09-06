@@ -1,8 +1,11 @@
 /**
  * Публичный API движка. UI работает только через этот модуль.
  */
-export { simulateDay } from './day';
+export { simulateDay, startDayRun, runHoursUntil, finishDay } from './day';
+export type { DayRunContext, DayTotals } from './day';
 export { simulateWeek } from './week';
+export { simulateDayUntilPause, resumeDay, applyEmergencyAction } from './emergency';
+export { dishOf, allDishes, dishMapOf, restaurantDish } from '../content/resolve';
 export {
   createGame,
   defaultSchedule,
@@ -10,6 +13,7 @@ export {
   toggleMenuDish,
   setDishPrice,
   toggleStopList,
+  importCustomDishes,
   purchaseIngredients,
   hireStaff,
   fireStaff,

@@ -8,7 +8,7 @@ import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, MetricRow, money } from '../widgets';
 import { ALCOHOL_LICENSE, VERANDA } from '@/lib/game/config/premises.config';
 import { CLEANING } from '@/lib/game/config/marketing.config';
-import { DISHES_MAP } from '@/lib/game/content/dishes';
+import { dishOf } from '@/lib/game/content/resolve';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { FileCheck, Sun, ShieldAlert, CheckCircle2, AlertTriangle, Sparkles, Info } from 'lucide-react';
@@ -23,7 +23,7 @@ export function LicensesScreen() {
   const alcohol = restaurant.licenses.alcohol;
   const alcoholActive = !!alcohol?.active;
   const alcoholDishesInMenu = restaurant.menu.dishes.filter(
-    (id) => DISHES_MAP[id]?.requiresAlcoholLicense,
+    (id) => dishOf(restaurant.menu, id)?.requiresAlcoholLicense,
   ).length;
 
   return (

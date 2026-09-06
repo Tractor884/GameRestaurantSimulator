@@ -17,13 +17,16 @@
  *   блюд из таблицы. Предпросмотр с подсветкой ошибок (parseMenuImport):
  *   id не найден / цена вне диапазона / мусор в поле. Дубликаты строк
  *   перезаписываются с предупреждением (последняя строка выигрывает).
- *   Полный импорт НОВЫХ блюд и рецептов (§35.3–35.4) требует хранения
- *   контента в состоянии — задокументирован в паспорте как дорожная карта.
+ *   Полный импорт НОВЫХ блюд и рецептов (§35.3–35.4) — РЕАЛИЗОВАН:
+ *   parseDishesImport + parseRecipesImport + importCustomDishes (setup.ts).
+ *   Кастомные блюда живут в restaurant.menu.customDishes (миграция v4) и
+ *   видны всем системам движка через content/resolve.ts.
  */
-import type { DishCategory, GameState, Restaurant, WeekStat } from './types';
+import type { Dish, DishCategory, GameState, Restaurant, StationType, WeekStat } from './types';
 import { DISHES_MAP, recipeCost } from './content/dishes';
-import { INGREDIENTS } from './content/ingredients';
+import { INGREDIENTS, INGREDIENTS_MAP } from './content/ingredients';
 import { STATIONS } from './config/staffRoles.config';
+import { dishMapOf, dishOf } from './content/resolve';
 
 const SEP = ';';
 const CATEGORY_LABELS: Record<DishCategory, string> = {
@@ -56,13 +59,14 @@ export function weekToDate(week: number, day = 0): string {
 
 /* ============================= ЭКСПОРТ ============================= */
 
-/** Меню: текущее состояние (ТЗ §35.5) — цены, себестоимость, FC, стоп-лист. */
+/** Меню: текущее состояние (ТЗ §35.5) — цены, себестоимость, FC, стоп-лист.
+ *  Включает КАСТОМНЫЕ блюда (§35.3) — полный справочник игрока. */
 export function menuCsv(restaurant: Restaurant): string {
   const rows: (string | number)[][] = [
     ['id', 'name', 'category', 'price', 'recipe_cost', 'food_cost_percent',
-      'popularity', 'quality', 'station', 'in_menu', 'stop_list', 'alcohol'],
+      'popularity', 'quality', 'station', 'in_menu', 'stop_list', 'alcohol', 'source'],
   ];
-  for (const dish of Object.values(DISHES_MAP)) {
+  for (const dish of Object.values(dishMapOf(restaurant.menu))) {
     const inMenu = restaurant.menu.dishes.includes(dish.id);
     const price = restaurant.menu.prices[dish.id] ?? dish.recommendedPrice;
     const cost = recipeCost(dish);
@@ -74,6 +78,7 @@ export function menuCsv(restaurant: Restaurant): string {
       inMenu ? 'yes' : 'no',
       restaurant.menu.stopList.includes(dish.id) ? 'yes' : 'no',
       dish.requiresAlcoholLicense ? 'yes' : 'no',
+      restaurant.menu.customDishes.some((d) => d.id === dish.id) ? 'custom' : 'library',
     ]);
   }
   return esc(rows);
@@ -309,7 +314,7 @@ function splitCsvLine(line: string): string[] {
 export function menuImportTemplate(restaurant: Restaurant): string {
   const rows: (string | number)[][] = [['id', 'price', 'in_menu']];
   for (const id of restaurant.menu.dishes.slice(0, 40)) {
-    const dish = DISHES_MAP[id];
+    const dish = dishOf(restaurant.menu, id);
     if (!dish) continue;
     rows.push([id, restaurant.menu.prices[id] ?? dish.recommendedPrice, 'yes']);
   }
@@ -337,4 +342,287 @@ export function readCsvFile(file: File): Promise<string> {
     reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
     reader.readAsText(file, 'utf-8');
   });
+}
+
+/* ==================== ИМПОРТ НОВЫХ БЛЮД И РЕЦЕПТУР (ТЗ §35.3–35.4) ==================== */
+
+/** Максимум кастомных блюд в состоянии (защита сейва от распухания). */
+export const CUSTOM_DISHES_LIMIT = 40;
+
+/** Дефолты для импортируемых блюд: популярность/качество — середина библиотеки. */
+const CUSTOM_DEFAULT_POPULARITY = 62; // 0..100 — середина библиотеки (см. Dish.basePopularity)
+const CUSTOM_DEFAULT_QUALITY = 72;
+
+/** Разбирает строку CSV с авто-определением разделителя («;» или «,»). */
+function splitAuto(line: string): string[] {
+  const sep = line.includes(';') ? ';' : line.includes(',') ? ',' : ';';
+  const out: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (const ch of line) {
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === sep && !inQuotes) {
+      out.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function parseBool(raw: string): boolean | null {
+  const v = raw.toLowerCase();
+  if (['true', 'yes', '1', 'да', 'y'].includes(v)) return true;
+  if (['false', 'no', '0', 'нет', 'n'].includes(v)) return false;
+  return null;
+}
+
+/** Категория: русская метка ИЛИ английский id (ТЗ §35.3: «завтраки»). */
+function parseCategory(raw: string): DishCategory | null {
+  const v = raw.toLowerCase().trim();
+  const byLabel = Object.entries(CATEGORY_LABELS).find(([, label]) => label === v);
+  if (byLabel) return byLabel[0] as DishCategory;
+  if (v in CATEGORY_LABELS) return v as DishCategory;
+  return null;
+}
+
+/** Станция: русское имя ИЛИ английский id («холодный цех» → cold_kitchen). */
+function parseStation(raw: string): StationType | null {
+  const v = raw.toLowerCase().trim();
+  for (const [id, cfg] of Object.entries(STATIONS)) {
+    if (v === id || cfg.name.toLowerCase() === v) return id as StationType;
+  }
+  return null;
+}
+
+/** Сезонность: «all_year» / «весь год» / пусто = всегда; иначе месяцы «5,6,7,8». */
+function parseSeasonality(raw: string): number[] | null {
+  const v = raw.toLowerCase().trim();
+  if (!v || v === 'all_year' || v === 'all' || v === 'весь год' || v === 'круглый год') return [];
+  const months = v.split(/[,;]/).map((m) => Number(m.trim()));
+  if (months.some((m) => !Number.isInteger(m) || m < 1 || m > 12)) return null;
+  return [...new Set(months)].sort((a, b) => a - b);
+}
+
+export interface DishImportRow {
+  line: number;
+  id: string;
+  name: string;
+  category: string;
+  recommendedPrice: number | null;
+  wastePercent: number;
+  prepMinutes: number;
+  station: string;
+  requiresAlcoholLicense: boolean;
+  seasonMonths: number[];
+  error: string | null;
+  warning: string | null;
+}
+
+export interface DishImportResult {
+  rows: DishImportRow[];
+  /** Валидные блюда (по id, дубликаты схлопнуты — последняя строка выигрывает). */
+  validIds: string[];
+  errors: number;
+}
+
+/** Парсинг файла блюд (§35.3): id;name;category;recommended_price;waste_percent;prep_time_min;station;requires_license;seasonality */
+export function parseDishesImport(text: string, existingMenu: { customDishes: Dish[] }): DishImportResult {
+  const clean = text.replace(/^\uFEFF/, '').trim();
+  const lines = clean.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const headerSkipped = lines.length > 0 && /^(id|dish_?id)/i.test(splitAuto(lines[0])[0] ?? '');
+  const dataLines = headerSkipped ? lines.slice(1) : lines;
+
+  const rows: DishImportRow[] = [];
+  const byId = new Map<string, DishImportRow>();
+  dataLines.forEach((line, i) => {
+    const p = splitAuto(line);
+    const row: DishImportRow = {
+      line: i + 1 + (headerSkipped ? 1 : 0),
+      id: p[0] ?? '',
+      name: p[1] ?? '',
+      category: p[2] ?? '',
+      recommendedPrice: null,
+      wastePercent: 0.05,
+      prepMinutes: 10,
+      station: p[6] ?? '',
+      requiresAlcoholLicense: false,
+      seasonMonths: [],
+      error: null,
+      warning: null,
+    };
+    const fail = (msg: string) => {
+      row.error = msg;
+      rows.push(row);
+    };
+    if (!row.id) return fail('пустой id');
+    if (DISHES_MAP[row.id]) return fail(`id «${row.id}» занят блюдом библиотеки`);
+    if (!row.name) return fail('пустое название');
+
+    const category = parseCategory(row.category);
+    if (!category) return fail(`категория «${row.category}» не распознана (завтраки/салаты/супы/горячее/…)`);
+
+    const price = Number((p[3] ?? '').replace(',', '.'));
+    if (!Number.isFinite(price) || price < 50 || price > 100_000) {
+      return fail(`цена «${p[3]}» вне диапазона 50–100 000 ₽`);
+    }
+    row.recommendedPrice = Math.round(price);
+
+    const waste = Number((p[4] ?? '5').replace(',', '.'));
+    row.wastePercent = Number.isFinite(waste) ? Math.min(0.3, Math.max(0, waste / 100)) : 0.05;
+
+    const prep = Number((p[5] ?? '10').replace(',', '.'));
+    row.prepMinutes = Number.isFinite(prep) ? Math.min(90, Math.max(1, Math.round(prep))) : 10;
+
+    const station = parseStation(row.station);
+    if (!station) return fail(`станция «${row.station}» не распознана (горячий цех/холодный цех/кофейная станция/…)`);
+
+    const license = parseBool(p[7] ?? 'false');
+    row.requiresAlcoholLicense = license ?? false;
+    if (license == null) row.warning = `флаг лицензии «${p[7]}» не распознан — считаю «нет»`;
+
+    const season = parseSeasonality(p[8] ?? 'all_year');
+    if (season == null) {
+      row.warning = `сезонность «${p[8]}» не распознана — считаю «круглый год»`;
+    } else {
+      row.seasonMonths = season;
+    }
+
+    // Дубликат внутри файла: последняя строка выигрывает (как в импорте меню).
+    if (byId.has(row.id)) {
+      row.warning = (row.warning ? row.warning + '; ' : '') + 'дубликат id — перезапишет строку выше';
+    }
+    byId.set(row.id, row);
+    rows.push(row);
+  });
+
+  // Лимит кастомного контента в состоянии.
+  const existingIds = new Set(existingMenu.customDishes.map((d) => d.id));
+  const validIds: string[] = [];
+  for (const [id, row] of byId) {
+    if (row.error) continue;
+    if (!existingIds.has(id) && existingIds.size + validIds.length >= CUSTOM_DISHES_LIMIT) continue;
+    validIds.push(id);
+  }
+  return { rows, validIds, errors: rows.filter((r) => r.error).length };
+}
+
+export interface RecipeImportRow {
+  line: number;
+  dishId: string;
+  ingredientId: string;
+  quantity: number | null;
+  error: string | null;
+}
+
+export interface RecipeImportResult {
+  rows: RecipeImportRow[];
+  /** dishId → валидные позиции рецепта. */
+  recipes: Record<string, { ingredientId: string; quantity: number }[]>;
+  errors: number;
+}
+
+/** Парсинг файла рецептур (§35.4): dish_id;ingredient_id;quantity */
+export function parseRecipesImport(text: string): RecipeImportResult {
+  const clean = text.replace(/^\uFEFF/, '').trim();
+  const lines = clean.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const headerSkipped = lines.length > 0 && /^(dish_?id)/i.test(splitAuto(lines[0])[0] ?? '');
+  const dataLines = headerSkipped ? lines.slice(1) : lines;
+
+  const rows: RecipeImportRow[] = [];
+  const recipes: Record<string, { ingredientId: string; quantity: number }[]> = {};
+  dataLines.forEach((line, i) => {
+    const p = splitAuto(line);
+    const row: RecipeImportRow = {
+      line: i + 1 + (headerSkipped ? 1 : 0),
+      dishId: p[0] ?? '',
+      ingredientId: p[1] ?? '',
+      quantity: null,
+      error: null,
+    };
+    const fail = (msg: string) => {
+      row.error = msg;
+      rows.push(row);
+    };
+    if (!row.dishId || !row.ingredientId) return fail('пустые dish_id/ingredient_id');
+    const ing = INGREDIENTS_MAP[row.ingredientId];
+    if (!ing) return fail(`ингредиент «${row.ingredientId}» не найден в справочнике`);
+    const qty = Number((p[2] ?? '').replace(',', '.'));
+    if (!Number.isFinite(qty) || qty <= 0 || qty > 100) {
+      return fail(`количество «${p[2]}» вне диапазона (0…100)`);
+    }
+    row.quantity = qty;
+    (recipes[row.dishId] ??= []).push({ ingredientId: row.ingredientId, quantity: qty });
+    rows.push(row);
+  });
+  return { rows, recipes, errors: rows.filter((r) => r.error).length };
+}
+
+/** Сборка валидного Dish из разобранных файлов (вызывается предпросмотром). */
+export function buildCustomDishes(
+  dishes: DishImportResult,
+  recipes: RecipeImportResult,
+  existingMenu: { customDishes: Dish[] },
+): { dishes: Dish[]; skipped: { id: string; reason: string }[] } {
+  const existingIds = new Set([...Object.keys(DISHES_MAP), ...existingMenu.customDishes.map((d) => d.id)]);
+  const out: Dish[] = [];
+  const skipped: { id: string; reason: string }[] = [];
+  const byId = new Map(dishes.rows.filter((r) => !r.error).map((r) => [r.id, r]));
+
+  for (const id of dishes.validIds) {
+    const row = byId.get(id);
+    if (!row || row.recommendedPrice == null) continue;
+    const recipe = recipes.recipes[id];
+    if (!recipe || recipe.length === 0) {
+      skipped.push({ id, reason: 'нет позиций рецепта в файле рецептур' });
+      continue;
+    }
+    // Схлопнуть повторяющиеся ингредиенты (сумма).
+    const merged = new Map<string, number>();
+    for (const item of recipe) merged.set(item.ingredientId, (merged.get(item.ingredientId) ?? 0) + item.quantity);
+    const station = parseStation(row.station)!;
+    const dish: Dish = {
+      id: row.id,
+      name: row.name,
+      category: parseCategory(row.category)!,
+      recommendedPrice: row.recommendedPrice,
+      recipe: [...merged.entries()].map(([ingredientId, quantity]) => ({ ingredientId, quantity })),
+      prepWastePercent: row.wastePercent,
+      prepMinutes: row.prepMinutes,
+      station,
+      basePopularity: CUSTOM_DEFAULT_POPULARITY,
+      baseQuality: CUSTOM_DEFAULT_QUALITY,
+      requiresAlcoholLicense: row.requiresAlcoholLicense,
+      seasonMonths: row.seasonMonths,
+    };
+    out.push(dish);
+    existingIds.add(id);
+  }
+  return { dishes: out, skipped };
+}
+
+/** Шаблоны файлов импорта новых блюд (§35.3–35.4). */
+export function dishesImportTemplate(): string {
+  const rows: (string | number)[][] = [
+    ['id', 'name', 'category', 'recommended_price', 'waste_percent', 'prep_time_min', 'station', 'requires_license', 'seasonality'],
+    ['dish_bruschetta_custom', 'Брускетта с томатами', 'закуски', 590, 4, 7, 'холодный цех', 'false', 'all_year'],
+    ['dish_seabass_custom', 'Сибас на гриле', 'горячее', 1890, 6, 18, 'горячий цех', 'false', 'all_year'],
+  ];
+  return withBom(rows);
+}
+
+export function recipesImportTemplate(): string {
+  const rows: (string | number)[][] = [
+    ['dish_id', 'ingredient_id', 'quantity'],
+    ['dish_bruschetta_custom', 'tomato', 0.12],
+    ['dish_bruschetta_custom', 'bread_sourdough', 0.08],
+    ['dish_seabass_custom', 'sea_bass', 0.22],
+    ['dish_seabass_custom', 'lemon', 0.03],
+  ];
+  return withBom(rows);
 }

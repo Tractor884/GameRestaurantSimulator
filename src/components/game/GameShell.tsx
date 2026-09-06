@@ -5,6 +5,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -37,6 +38,7 @@ import {
   TrendingUp,
   Loader2,
   Gauge,
+  Clock,
 } from 'lucide-react';
 
 import { RestaurantScreen } from './screens/RestaurantScreen';
@@ -55,6 +57,7 @@ import { LoansScreen } from './screens/LoansScreen';
 import { QuarterlyScreen } from './screens/QuarterlyScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { GameOverDialog, FinalStatusBadge } from './GameOverDialog';
+import { EmergencyDialog } from './EmergencyDialog';
 
 const NAV: { group: string; items: { id: ScreenId; label: string; icon: typeof Utensils }[] }[] = [
   {
@@ -115,6 +118,7 @@ export function GameShell() {
   const restaurant = state?.restaurant;
   const lastWeek = state?.history.weekStats[state.history.weekStats.length - 1];
   const pendingCritical = state?.activeEvents.find((e) => !e.resolved) ?? null;
+  const middayActive = useGame((s) => s.midday != null);
 
   // Тосты через sonner.
   useEffect(() => {
@@ -141,6 +145,14 @@ export function GameShell() {
       if (!s.state || s.busy || s.state.phase === 'gameover') return;
       if (s.state.activeEvents.some((ev) => !ev.resolved)) return;
       const key = e.key.toLowerCase();
+      // День на паузе «экстренных решений»: D продолжает его (W заблокирован).
+      if (s.midday) {
+        if (key === 'd' || key === 'в') {
+          e.preventDefault();
+          s.continueMidday();
+        }
+        return;
+      }
       if (key === 'd' || key === 'в') {
         e.preventDefault();
         s.runDay();
@@ -187,7 +199,30 @@ export function GameShell() {
                 {DIFFICULTIES[state.difficultyId]?.name ?? 'Стандарт'}
               </Badge>
             </div>
-            <p className="text-xs text-stone-500">{weekDayLabel}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-xs text-stone-500">{weekDayLabel}</p>
+              {/* Индикатор недели: 7 точек-дней (прошедшие stone-300, текущий amber, будущие stone-200) */}
+              <span
+                className="hidden sm:flex items-center gap-1"
+                role="img"
+                aria-label={`День недели ${state.day + 1} из 7`}
+              >
+                {DAYS_RU.map((d, i) => (
+                  <span
+                    key={d}
+                    title={`${d} — ${i < state.day ? 'прожит' : i === state.day ? 'сегодня' : 'впереди'}`}
+                    className={cn(
+                      'h-1.5 w-1.5 rounded-full transition-colors',
+                      i < state.day
+                        ? 'bg-stone-400'
+                        : i === state.day
+                          ? 'bg-amber-600 ring-2 ring-amber-200'
+                          : 'bg-stone-200',
+                    )}
+                  />
+                ))}
+              </span>
+            </div>
           </div>
 
           <div className="flex-1" />
@@ -219,7 +254,12 @@ export function GameShell() {
 
           {/* Кнопки симуляции */}
           <div className="flex items-center gap-2">
-            {pendingCritical ? (
+            {middayActive ? (
+              <Badge className="bg-orange-100 text-orange-800 hover:bg-orange-100">
+                <Clock className="h-3.5 w-3.5 mr-1" aria-hidden />
+                Пауза: экстренные решения
+              </Badge>
+            ) : pendingCritical ? (
               <Badge variant="secondary" className="bg-red-100 text-red-800">
                 <AlertTriangle className="h-3.5 w-3.5 mr-1" aria-hidden />
                 Требуется решение
@@ -233,7 +273,7 @@ export function GameShell() {
                   disabled={busy}
                   variant="outline"
                   size="sm"
-                  className="border-stone-300"
+                  className="border-stone-300 active:scale-[0.98]"
                 >
                   {busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" aria-hidden /> : <Play className="h-4 w-4 mr-1" aria-hidden />}
                   День
@@ -242,7 +282,7 @@ export function GameShell() {
                   onClick={runWeek}
                   disabled={busy}
                   size="sm"
-                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                  className="bg-amber-600 hover:bg-amber-700 text-white active:scale-[0.98]"
                 >
                   {busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" aria-hidden /> : <FastForward className="h-4 w-4 mr-1" aria-hidden />}
                   Неделя
@@ -278,14 +318,20 @@ export function GameShell() {
                       setNavOpen(false);
                     }}
                     className={cn(
-                      'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors text-left',
+                      'group w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors text-left',
                       screen === item.id
                         ? 'bg-amber-100 text-amber-900 font-semibold'
                         : 'text-stone-600 hover:bg-stone-100',
                     )}
                     aria-current={screen === item.id ? 'page' : undefined}
                   >
-                    <item.icon className="h-4 w-4 shrink-0" aria-hidden />
+                    <item.icon
+                      className={cn(
+                        'h-4 w-4 shrink-0 transition-transform group-hover:scale-105',
+                        screen === item.id && 'text-amber-700',
+                      )}
+                      aria-hidden
+                    />
                     <span className="truncate">{item.label}</span>
                     {item.id === 'events' && state.activeEvents.length > 0 && (
                       <Badge className="ml-auto bg-red-500 text-white text-[10px] px-1.5 min-w-5 justify-center">
@@ -300,25 +346,34 @@ export function GameShell() {
         </nav>
         {navOpen && <div className="fixed inset-0 bg-black/20 z-40 lg:hidden" onClick={() => setNavOpen(false)} aria-hidden />}
 
-        {/* Контент экрана */}
+        {/* Контент экрана: лёгкий fade+slide при смене экрана (0.18с, easeOut) */}
         <main className="flex-1 overflow-y-auto min-w-0">
-          <div className="p-4 lg:p-6 max-w-[1400px] mx-auto">
-            {screen === 'restaurant' && <RestaurantScreen />}
-            {screen === 'menu' && <MenuScreen />}
-            {screen === 'warehouse' && <WarehouseScreen />}
-            {screen === 'staff' && <StaffScreen />}
-            {screen === 'schedule' && <ScheduleScreen />}
-            {screen === 'finance' && <FinanceScreen />}
-            {screen === 'analytics' && <AnalyticsScreen />}
-            {screen === 'marketing' && <MarketingScreen />}
-            {screen === 'reviews' && <ReviewsScreen />}
-            {screen === 'events' && <EventsScreen />}
-            {screen === 'licenses' && <LicensesScreen />}
-            {screen === 'equipment' && <EquipmentScreen />}
-            {screen === 'loans' && <LoansScreen />}
-            {screen === 'quarterly' && <QuarterlyScreen />}
-            {screen === 'settings' && <SettingsScreen />}
-          </div>
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={screen}
+              className="p-4 lg:p-6 max-w-[1400px] mx-auto"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 8 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+            >
+              {screen === 'restaurant' && <RestaurantScreen />}
+              {screen === 'menu' && <MenuScreen />}
+              {screen === 'warehouse' && <WarehouseScreen />}
+              {screen === 'staff' && <StaffScreen />}
+              {screen === 'schedule' && <ScheduleScreen />}
+              {screen === 'finance' && <FinanceScreen />}
+              {screen === 'analytics' && <AnalyticsScreen />}
+              {screen === 'marketing' && <MarketingScreen />}
+              {screen === 'reviews' && <ReviewsScreen />}
+              {screen === 'events' && <EventsScreen />}
+              {screen === 'licenses' && <LicensesScreen />}
+              {screen === 'equipment' && <EquipmentScreen />}
+              {screen === 'loans' && <LoansScreen />}
+              {screen === 'quarterly' && <QuarterlyScreen />}
+              {screen === 'settings' && <SettingsScreen />}
+            </motion.div>
+          </AnimatePresence>
         </main>
       </div>
 
@@ -368,6 +423,9 @@ export function GameShell() {
 
       {/* Финальный экран: счёт и статус НЕ исчезают сами — пользователь закрывает сам */}
       <GameOverDialog />
+
+      {/* Пауза «экстренных решений» (ТЗ §8.4–8.6): полудневный снимок + действия */}
+      <EmergencyDialog />
     </div>
   );
 }

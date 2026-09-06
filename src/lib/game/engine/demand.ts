@@ -28,7 +28,7 @@ import {
 import { MARKETING_CHANNELS_MAP, MARKETING_LIMITS } from '../config/marketing.config';
 import { reputationFactor } from '../config/reputation.config';
 import { DIFFICULTIES } from '../config/difficulty.config';
-import { DISHES_MAP } from '../content/dishes';
+import { dishOf } from '../content/resolve';
 import type { Rng } from '../rng';
 import { workingHours } from './core';
 
@@ -45,7 +45,7 @@ export interface DemandFactors {
 export function avgCategoryPrices(restaurant: Restaurant): Record<string, number> {
   const sums: Record<string, { w: number; s: number }> = {};
   for (const dishId of restaurant.menu.dishes) {
-    const dish = DISHES_MAP[dishId];
+    const dish = dishOf(restaurant.menu, dishId);
     if (!dish) continue;
     const price = restaurant.menu.prices[dishId] ?? dish.recommendedPrice;
     const bucket = (sums[dish.category] ??= { w: 0, s: 0 });
