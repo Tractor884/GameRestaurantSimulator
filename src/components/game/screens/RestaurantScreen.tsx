@@ -6,11 +6,13 @@
 
 import { useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useGame } from '@/lib/game/store/gameStore';
 import { KpiCard, SectionCard, WarningBanner, ScoreBar, RangeBadge, money, moneyShort, EmptyState } from '../widgets';
 import { InfoHint } from '../hints';
 import { DISHES_MAP } from '@/lib/game/content/dishes';
 import { DAYS_RU } from '@/lib/game/engine';
+import { HallScene } from '../HallScene';
 import {
   Users,
   Banknote,
@@ -22,6 +24,7 @@ import {
   TrendingUp,
   Hourglass,
   DoorOpen,
+  MapPin,
 } from 'lucide-react';
 
 export function RestaurantScreen() {
@@ -100,12 +103,29 @@ export function RestaurantScreen() {
       {dayWarnings.length > 0 && <WarningBanner warnings={dayWarnings} />}
 
       <div className="grid lg:grid-cols-3 gap-4">
-        {/* Отчёт последнего дня */}
-        <SectionCard
-          title={lastDay ? `День: ${dayLabel}` : 'Отчёт дня'}
-          icon={DoorOpen}
-          className="lg:col-span-2"
-        >
+        {/* Отчёт последнего дня + SVG-сцена зала (ТЗ §31.1) — табы */}
+        <div className="lg:col-span-2">
+        <Tabs defaultValue="report">
+          <TabsList className="mb-3">
+            <TabsTrigger value="report" className="gap-1.5">
+              <DoorOpen className="h-3.5 w-3.5" aria-hidden />
+              {lastDay ? `День: ${dayLabel}` : 'Отчёт дня'}
+            </TabsTrigger>
+            <TabsTrigger value="hall" className="gap-1.5">
+              <MapPin className="h-3.5 w-3.5" aria-hidden />
+              Зал ресторана
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="hall">
+            <SectionCard title="Зал ресторана — план на день" icon={MapPin}>
+              <HallScene />
+            </SectionCard>
+          </TabsContent>
+          <TabsContent value="report">
+          <SectionCard
+            title={lastDay ? `День: ${dayLabel}` : 'Отчёт дня'}
+            icon={DoorOpen}
+          >
           {lastDay ? (
             <div className="space-y-4">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
@@ -162,7 +182,10 @@ export function RestaurantScreen() {
           ) : (
             <EmptyState text="Нажмите «День» или «Неделя», чтобы запустить симуляцию" />
           )}
-        </SectionCard>
+          </SectionCard>
+          </TabsContent>
+        </Tabs>
+        </div>
 
         {/* Правая колонка: BSC + прогноз */}
         <div className="space-y-4">
