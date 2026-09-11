@@ -37,6 +37,7 @@ import { addTransaction, clamp } from './core';
 import { computeBSCFromState, computeFinalScore } from './bsc';
 import { computeForecast } from './forecast';
 import { weeklyTurnover } from './staff';
+import { INSURANCE_PAYROLL_SHARE } from './welfare';
 
 export function closeWeek(state: GameState, seed: number): WeekSimulationResult {
   const draft = state; // мутируем переданный клон
@@ -61,6 +62,13 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   );
   const payroll = restaurant.finance.accrued.payrollGross;
   const socialContributions = Math.round(payroll * TAXES.socialContributions);
+  // МЕДСТРАХОВКА ПЕРСОНАЛА (благосостояние, v6): 4% фактического недельного
+  //  ФОТ при включённой опции. По умолчанию выключена → ветка не меняет
+  //  ни денег, ни P&L (эталоны движка идентичны).
+  const insuranceCost =
+    restaurant.staff.insurance && payroll > 0
+      ? Math.round(payroll * INSURANCE_PAYROLL_SHARE)
+      : 0;
 
   // Начисления периодических расходов (ТЗ §18.5).
   const rentAccrued = Math.round(restaurant.rentMonthly / 4);
@@ -92,7 +100,7 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   const grossProfit = revenue - cogs - wasteCost - acquiringPnl;
   const operatingProfit =
     grossProfit - payroll - socialContributions - rentAccrued - utilitiesAccrued -
-    marketing - maintenance - depreciation - licenseAmortization - otherOperating;
+    marketing - maintenance - depreciation - licenseAmortization - otherOperating - insuranceCost;
   const loanInterest = Math.round(
     restaurant.finance.loans.reduce((s, l) => s + (l.remaining * l.annualRate) / 12, 0),
   );
@@ -106,6 +114,7 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     rentAccrued, utilitiesAccrued, marketing, maintenance, repairs: 0,
     depreciation, licenseAmortization, otherOperating, operatingProfit,
     loanInterest, taxableProfit, tax, netProfit, acquiringFees: acquiringPnl,
+    insurance: insuranceCost,
   };
 
   // ===== ДВИЖЕНИЕ ДЕНЕГ (cash flow) =====
@@ -114,6 +123,10 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   if (payroll > 0) {
     addTransaction(restaurant, weekDate, 'payroll', payroll, 'out', 'Зарплата за неделю (gross)');
     addTransaction(restaurant, weekDate, 'social_contribution', socialContributions, 'out', 'Социальные взносы 30%');
+  }
+  // Медстраховка персонала: списание вместе с зарплатой.
+  if (insuranceCost > 0) {
+    addTransaction(restaurant, weekDate, 'insurance', insuranceCost, 'out', 'Медстраховка персонала (4% ФОТ)');
   }
   restaurant.finance.accrued.payrollGross = 0;
 

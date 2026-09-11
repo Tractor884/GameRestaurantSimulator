@@ -203,8 +203,9 @@ export function updateFatigue(
     const scaled = growth > 0 ? growth * diffFatigueRate : growth;
     pool.fatigue = clamp(pool.fatigue + scaled, 0, 100);
     // Мораль: усталость и перегрузка давят, чаевые поднимают (в day.ts).
+    // Медстраховка (благосостояние): падение морали медленнее (×0.24).
     const targetMorale = clamp(85 - pool.fatigue * 0.5 - Math.max(0, roleLoad - 1) * 30, 0, 100);
-    pool.morale += (targetMorale - pool.morale) * 0.3;
+    pool.morale += (targetMorale - pool.morale) * (restaurant.staff.insurance ? 0.24 : 0.3);
     pool.morale = clamp(pool.morale, 0, 100);
     // Адаптация новичков тает.
     pool.newHires = Math.max(0, pool.newHires - 1);
@@ -225,15 +226,17 @@ export function applyQuit(restaurant: Restaurant, roleId: RoleId): boolean {
   return true;
 }
 
-/** Текучка: шанс увольнения при низкой морали (вызывается в конце недели). */
+/** Текучка: шанс увольнения при низкой морали (вызывается в конце недели).
+ *  Медстраховка (благосостояние): риск увольнения ×0.6. */
 export function weeklyTurnover(restaurant: Restaurant, rngChance: () => number): string[] {
   const fired: string[] = [];
+  const insured = restaurant.staff.insurance === true;
   for (const roleId of ROLE_IDS) {
     const pool = restaurant.staff.pools[roleId];
     if (pool.count <= 0) continue;
     if (pool.morale < STAFF_DYNAMICS.quitMoraleThreshold) {
       const p = STAFF_DYNAMICS.quitChanceAtZeroMorale * (1 - pool.morale / STAFF_DYNAMICS.quitMoraleThreshold);
-      if (rngChance() < p * pool.count) {
+      if (rngChance() < p * pool.count * (insured ? 0.6 : 1)) {
         pool.count -= 1;
         fired.push(STAFF_ROLES[roleId].name);
       }

@@ -39,6 +39,7 @@ import {
   Loader2,
   Gauge,
   Clock,
+  ImageIcon,
 } from 'lucide-react';
 
 import { RestaurantScreen } from './screens/RestaurantScreen';
@@ -56,8 +57,10 @@ import { EquipmentScreen } from './screens/EquipmentScreen';
 import { LoansScreen } from './screens/LoansScreen';
 import { QuarterlyScreen } from './screens/QuarterlyScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { ArtManagerScreen } from './screens/ArtManagerScreen';
 import { GameOverDialog, FinalStatusBadge } from './GameOverDialog';
 import { EmergencyDialog } from './EmergencyDialog';
+import { useArtStore } from '@/lib/game/presentation/artState';
 
 const NAV: { group: string; items: { id: ScreenId; label: string; icon: typeof Utensils }[] }[] = [
   {
@@ -97,6 +100,7 @@ const NAV: { group: string; items: { id: ScreenId; label: string; icon: typeof U
     group: 'Отчёты',
     items: [
       { id: 'quarterly', label: 'Квартальный разбор', icon: ClipboardList },
+      { id: 'art', label: 'Иллюстрации', icon: ImageIcon },
       { id: 'settings', label: 'Настройки и сейвы', icon: Settings },
     ],
   },
@@ -131,6 +135,11 @@ export function GameShell() {
   }, [toasts, dismiss]);
 
   const [navOpen, setNavOpen] = useState(false);
+
+  // Арт-пак (IndexedDB): инициализация object URL один раз за сессию.
+  useEffect(() => {
+    void useArtStore.getState().init();
+  }, []);
 
   // Горячие клавиши (ТЗ §31.7 — быстрый доступ): D/Д — день, W/Н — неделя.
   // Не срабатываем при вводе текста (input/textarea/contenteditable) и при
@@ -371,6 +380,7 @@ export function GameShell() {
               {screen === 'equipment' && <EquipmentScreen />}
               {screen === 'loans' && <LoansScreen />}
               {screen === 'quarterly' && <QuarterlyScreen />}
+              {screen === 'art' && <ArtManagerScreen />}
               {screen === 'settings' && <SettingsScreen />}
             </motion.div>
           </AnimatePresence>

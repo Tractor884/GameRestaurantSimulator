@@ -6,7 +6,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { Dish, EmergencyActionId, GameState, MiddaySnapshot, PlayerAction } from '@/lib/game/types';
+import type { Dish, EmergencyActionId, GameState, MiddaySnapshot, PlayerAction, RoleId } from '@/lib/game/types';
 import {
   createGame,
   simulateDay,
@@ -33,6 +33,9 @@ import {
   resolveEvent,
   autoOrderAction,
   setAutoPurchase,
+  payBonus,
+  trainRole,
+  setInsurance,
   type SetupOptions,
   type ActionResult,
 } from '@/lib/game/engine';
@@ -53,6 +56,7 @@ export type ScreenId =
   | 'equipment'
   | 'loans'
   | 'quarterly'
+  | 'art'
   | 'settings';
 
 const AUTOSAVE_KEY = 'rest-sim-autosave-v1';
@@ -95,7 +99,9 @@ interface GameStore {
   /** Доиграть день после паузы. */
   continueMidday(): void;
   /** Настройки геймплея (§8.4 пауза и др.). */
-  setOption(key: 'middayPause', value: boolean): void;
+  setOption(key: 'middayPause' | 'builtinIllustrations', value: boolean): void;
+  /** Активная вкладка главного экрана (Сцена/План, миграция v5). */
+  setMainView(view: 'report' | 'scene' | 'hall'): void;
   // Действия игрока (обёртки).
   toggleDish(dishId: string): void;
   setPrice(dishId: string, price: number): void;
@@ -114,6 +120,12 @@ interface GameStore {
   equipment(zone: 'kitchen' | 'coffee' | 'hall', level: 'basic' | 'standard' | 'professional'): void;
   equipmentRepair(zone: 'kitchen' | 'coffee' | 'hall'): void;
   deepClean(): void;
+  /** Благосостояние (v6): премия всему штату. */
+  bonus(): void;
+  /** Благосостояние (v6): тренинг роли. */
+  training(roleId: RoleId): void;
+  /** Благосостояние (v6): вкл/выкл медстраховки. */
+  insuranceSet(enabled: boolean): void;
   license(): void;
   loanRepay(loanIndex: number, amount: number): void;
   resolveCritical(eventId: string, resolutionIndex: number): void;
@@ -238,6 +250,16 @@ export const useGame = create<GameStore>((set, get) => ({
     persist(AUTOSAVE_KEY, draft);
   },
 
+  setMainView: (view) => {
+    const s = get();
+    if (!s.state || s.midday) return;
+    const draft = structuredClone(s.state);
+    if (!draft.options) draft.options = { middayPause: true };
+    draft.options.mainView = view;
+    set({ state: draft });
+    persist(AUTOSAVE_KEY, draft);
+  },
+
   runWeek: () => {
     const s = get();
     if (!s.state || s.busy || s.state.phase === 'gameover') return;
@@ -305,6 +327,9 @@ export const useGame = create<GameStore>((set, get) => ({
   equipment: (zone, level) => get().apply((st) => buyEquipment(st, zone, level)),
   equipmentRepair: (zone) => get().apply((st) => repairEquipment(st, zone)),
   deepClean: () => get().apply((st) => deepCleaning(st)),
+  bonus: () => get().apply((st) => payBonus(st)),
+  training: (roleId) => get().apply((st) => trainRole(st, roleId)),
+  insuranceSet: (enabled) => get().apply((st) => setInsurance(st, enabled)),
   license: () => get().apply((st) => buyAlcoholLicense(st)),
   loanRepay: (loanIndex, amount) => get().apply((st) => repayLoan(st, loanIndex, amount)),
   resolveCritical: (eventId, resolutionIndex) =>
@@ -404,11 +429,23 @@ export const useGame = create<GameStore>((set, get) => ({
  *  v2 → v3 (аудит): счётчики id в состоянии; priorReviews 35; weekStats
  *  старых сейвов без returningShare.
  *  v3 → v4: настройки геймплея (options.middayPause) и кастомные блюда
- *  меню (customDishes, CSV-импорт §35.3–35.4). */
+ *  меню (customDishes, CSV-импорт §35.3–35.4).
+ *  v4 → v5: визуальный слой — встроенные иллюстрации (по умолчанию ВЫКЛ:
+ *  приоритет у пользовательских загрузок) и вкладка главного экрана.
+ *  v6: благосостояние — страховка/кулдауны премий и тренингов. */
 function migrateState(state: GameState): void {
   const r = state.restaurant;
   // v4: настройки геймплея.
   if (!state.options) state.options = { middayPause: true };
+  // v5: визуальный слой — дефолт выкл, пользователь грузит свои картинки.
+  if (state.options.builtinIllustrations == null) state.options.builtinIllustrations = false;
+  if (state.options.mainView == null) state.options.mainView = 'report';
+  if (r) {
+    // v6: благосостояние (премии/тренинги/страховка) — опциональные поля.
+    if (r.staff.insurance == null) r.staff.insurance = false;
+    if (r.staff.lastBonusDay == null) r.staff.lastBonusDay = -999;
+    if (r.staff.trainedAt == null) r.staff.trainedAt = {};
+  }
   if (r) {
     // v4: кастомные блюда (CSV-импорт новых блюд §35.3–35.4).
     if (!r.menu.customDishes) r.menu.customDishes = [];

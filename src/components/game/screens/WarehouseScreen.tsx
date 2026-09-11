@@ -18,6 +18,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { CsvReportTools } from '../CsvReportTools';
+import { WarehouseVisualBlock } from '../visual/WarehouseScene';
 import {
   Boxes,
   Wallet,
@@ -104,6 +105,9 @@ export function WarehouseScreen() {
 
   return (
     <div className="space-y-4">
+      {/* Персонаж зоны + живая мини-сцена (PRESENTATION-LAYER §5): Сергей */}
+      <WarehouseVisualBlock />
+
       {/* KPI склада */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard

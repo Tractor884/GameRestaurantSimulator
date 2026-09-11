@@ -122,6 +122,9 @@ export type TransactionType =
   | 'equipment'
   | 'deposit'
   | 'renovation'
+  | 'bonus' // премии штату (благосостояние)
+  | 'training' // тренинги персонала
+  | 'insurance' // медстраховка персонала
   | 'other';
 
 /* ============================= КОНТЕНТ ============================= */
@@ -207,6 +210,13 @@ export interface StaffState {
   pools: Record<RoleId, StaffPool>;
   /** График: роль → день недели (0..6) → смены. */
   schedule: Record<RoleId, StaffShifts[]>;
+  /** Медстраховка персонала: 4% недельного ФОТ, мораль стабильнее,
+   *  риск увольнений ×0.6 (миграция v6). */
+  insurance?: boolean;
+  /** День последней премии (абс. индекс) — кулдаун 14 дней (v6). */
+  lastBonusDay?: number;
+  /** День последнего тренинга роли — кулдаун 21 день (v6). */
+  trainedAt?: Partial<Record<RoleId, number>>;
   /** Временный вызов персонала «на сегодня» (экстренное решение ТЗ §8.4).
    *  Живёт только внутри симулируемого дня — очищается при финализации дня
    *  и не попадает в сейвы. */
@@ -367,6 +377,8 @@ export interface PnlReport {
   depreciation: number;
   licenseAmortization: number;
   otherOperating: number;
+  /** Медстраховка персонала за неделю (благосостояние, опционально). */
+  insurance?: number;
   operatingProfit: number; // EBITDA
   loanInterest: number;
   taxableProfit: number;
@@ -628,10 +640,15 @@ export interface MiddaySnapshot {
   options: EmergencyOption[];
 }
 
-/** Пользовательские настройки геймплея (переживают сейв). */
+/** Пользовательские настройки геймплея и вида (переживают сейв). */
 export interface GameOptions {
   /** Пауза «экстренных решений» после обеденного пика (ТЗ §8.4–8.6). */
   middayPause: boolean;
+  /** Встроенные иллюстрации (P0a). Выкл по умолчанию: приоритет — свои
+   *  картинки через «Иллюстрации» (миграция v5). */
+  builtinIllustrations?: boolean;
+  /** Активная вкладка главного экрана (миграция v5). */
+  mainView?: 'report' | 'scene' | 'hall';
 }
 
 /* ============================= РЕЗУЛЬТАТЫ СИМУЛЯЦИИ ============================= */

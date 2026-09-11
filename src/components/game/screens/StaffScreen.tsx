@@ -4,7 +4,7 @@
  */
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useGame } from '@/lib/game/store/gameStore';
 import {
   SectionCard,
@@ -25,14 +25,24 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
-import { Users, UserPlus, UserMinus, Wallet, Percent, Coins } from 'lucide-react';
+import { Users, UserPlus, UserMinus, Wallet, Percent, Coins, Gift, GraduationCap, HeartPulse } from 'lucide-react';
 import type { RoleId } from '@/lib/game/types';
+import { CharacterPanel } from '../visual/CharacterPanel';
+import { getStaffRoleMood } from '@/lib/game/presentation';
+import { MOOD_UI } from '../visual/characterMeta';
+import { bonusCost, trainingCost, BONUS_COOLDOWN_DAYS, TRAINING_COOLDOWN_DAYS, absoluteDay } from '@/lib/game/engine';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 
 export function StaffScreen() {
   const state = useGame((s) => s.state)!;
   const restaurant = state.restaurant!;
   const hire = useGame((s) => s.hire);
   const fire = useGame((s) => s.fire);
+  const bonus = useGame((s) => s.bonus);
+  const training = useGame((s) => s.training);
+  const insuranceSet = useGame((s) => s.insuranceSet);
   const disabled = state.phase === 'gameover';
 
   const staff = restaurant.staff;
@@ -88,6 +98,10 @@ export function StaffScreen() {
 
   return (
     <div className="space-y-4">
+      {/* Персонаж зоны (PRESENTATION-LAYER §5): Анна + контент справа */}
+      <div className="grid gap-4 items-start lg:grid-cols-[280px,1fr]">
+        <CharacterPanel characterId="hr" vertical />
+        <div className="space-y-4 min-w-0">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard
           icon={Users}
@@ -145,10 +159,19 @@ export function StaffScreen() {
               {ROLE_IDS.map((roleId) => {
                 const cfg = STAFF_ROLES[roleId as RoleId];
                 const pool = staff.pools[roleId];
+                const roleMood = getStaffRoleMood(state, roleId);
+                const roleUi = MOOD_UI[roleMood];
                 return (
                   <TableRow key={roleId}>
                     <TableCell>
-                      <p className="text-sm font-medium text-stone-800">{cfg.name}</p>
+                      <p className="text-sm font-medium text-stone-800 flex items-center gap-1.5">
+                        <span
+                          className={cn('inline-block h-2 w-2 shrink-0 rounded-full', roleUi.dot)}
+                          title={`Состояние роли: ${roleUi.label}`}
+                          aria-label={`Состояние роли: ${roleUi.label}`}
+                        />
+                        <span className="truncate">{cfg.name}</span>
+                      </p>
                       <p className="text-xs text-stone-500 mt-0.5 max-w-[280px]">{cfg.description}</p>
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-stone-800">
@@ -240,7 +263,147 @@ export function StaffScreen() {
           </div>
         </div>
       </SectionCard>
+
+      {/* Благосостояние команды (v6): премии / страховка / тренинги */}
+      <WelfareSection disabled={disabled} bonus={bonus} training={training} insuranceSet={insuranceSet} />
+        </div>
+      </div>
     </div>
+  );
+}
+
+/* ── Благосостояние: премия, страховка, тренинги (v6) ── */
+
+function WelfareSection({
+  disabled,
+  bonus,
+  training,
+  insuranceSet,
+}: {
+  disabled: boolean;
+  bonus(): void;
+  training(roleId: RoleId): void;
+  insuranceSet(enabled: boolean): void;
+}) {
+  const state = useGame((s) => s.state)!;
+  const staff = state.restaurant!.staff;
+  const cash = state.restaurant!.finance.cash;
+  const [trainRoleSel, setTrainRoleSel] = useState<RoleId>('waiter');
+  const now = absoluteDay(state);
+
+  const bCost = bonusCost(state);
+  const bCooldownLeft = Math.max(0, BONUS_COOLDOWN_DAYS - (now - (staff.lastBonusDay ?? -999)));
+  const tCost = trainingCost(state, trainRoleSel);
+  const tCooldownLeft = Math.max(0, TRAINING_COOLDOWN_DAYS - (now - (staff.trainedAt?.[trainRoleSel] ?? -999)));
+  const insuranceOn = staff.insurance ?? false;
+  const trainPool = staff.pools[trainRoleSel];
+
+  return (
+    <SectionCard title="Управление командой" icon={HeartPulse}>
+      <div className="grid gap-4 md:grid-cols-2">
+        {/* Премия */}
+        <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
+          <div className="flex items-center gap-2">
+            <span className="rounded-lg bg-amber-100 p-1.5">
+              <Gift className="h-4 w-4 text-amber-700" aria-hidden />
+            </span>
+            <p className="font-semibold text-stone-800">Премия всему штату</p>
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-stone-500">
+            Разовый денежный стимул: мораль +12, усталость −6 всем ролям. Частые премии
+            обесцениваются (эффект ×0.5). Кулдаун {BONUS_COOLDOWN_DAYS} дней.
+          </p>
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <div>
+              <p className="text-lg font-bold tabular-nums text-stone-900">{money(bCost)}</p>
+              {bCooldownLeft > 0 && <p className="text-[11px] text-amber-600">кулдаун: ещё {bCooldownLeft} дн</p>}
+            </div>
+            <Button
+              className="h-11 bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={bonus}
+              disabled={disabled || cash < bCost}
+              title={bCooldownLeft > 0 ? 'Эффект будет уменьшен (кулдаун)' : 'Мораль +12, усталость −6'}
+            >
+              <Gift className="h-4 w-4 mr-1" aria-hidden />
+              Выплатить
+            </Button>
+          </div>
+        </div>
+
+        {/* Страховка */}
+        <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
+          <div className="flex items-center gap-2">
+            <span className="rounded-lg bg-emerald-100 p-1.5">
+              <HeartPulse className="h-4 w-4 text-emerald-700" aria-hidden />
+            </span>
+            <p className="font-semibold text-stone-800">Медстраховка персонала</p>
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-stone-500">
+            Оплачивается с зарплатой: 4% недельного ФОТ. Мораль падает медленнее, риск
+            увольнений −40%. При включении — разовый буст доверия (+4).
+          </p>
+          <div className="mt-3 flex items-center gap-2.5">
+            <Switch
+              id="staff-insurance"
+              checked={insuranceOn}
+              onCheckedChange={(v) => insuranceSet(v)}
+              disabled={disabled}
+              aria-label="Медстраховка персонала"
+            />
+            <Label htmlFor="staff-insurance" className="cursor-pointer text-sm text-stone-700">
+              {insuranceOn ? 'Включена' : 'Выключена'}
+            </Label>
+          </div>
+        </div>
+
+        {/* Тренинги */}
+        <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4 md:col-span-2">
+          <div className="flex items-center gap-2">
+            <span className="rounded-lg bg-stone-200 p-1.5">
+              <GraduationCap className="h-4 w-4 text-stone-700" aria-hidden />
+            </span>
+            <p className="font-semibold text-stone-800">Тренинги ролей</p>
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-stone-500">
+            Семинар для смены роли: адаптация новичков завершается мгновенно, мораль +5,
+            усталость −8. Кулдаун {TRAINING_COOLDOWN_DAYS} дней на роль. Стоимость 15 000 ₽ за сотрудника роли.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <Select value={trainRoleSel} onValueChange={(v) => setTrainRoleSel(v as RoleId)}>
+              <SelectTrigger className="h-11 w-[240px]" aria-label="Роль для тренинга">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ROLE_IDS.map((id) => (
+                  <SelectItem key={id} value={id}>
+                    {STAFF_ROLES[id].name} · {staff.pools[id]?.count ?? 0} чел
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold tabular-nums text-stone-900">{money(tCost)}</p>
+              <p className="text-[11px] text-stone-500">
+                {trainPool && trainPool.newHires > 0
+                  ? `новичков к адаптации: ${trainPool.newHires}`
+                  : 'новичков нет — тренинг как профилактика выгорания'}
+                {tCooldownLeft > 0 && <span className="text-amber-600"> · кулдаун {tCooldownLeft} дн</span>}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              className="h-11 border-stone-300"
+              onClick={() => training(trainRoleSel)}
+              disabled={disabled || cash < tCost || (trainPool?.count ?? 0) <= 0 || tCooldownLeft > 0}
+              title="Адаптация новичков мгновенно, мораль +5, усталость −8"
+            >
+              <GraduationCap className="h-4 w-4 mr-1" aria-hidden />
+              Провести тренинг
+            </Button>
+          </div>
+        </div>
+      </div>
+    </SectionCard>
   );
 }
 

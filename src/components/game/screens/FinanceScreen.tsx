@@ -9,6 +9,7 @@ import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, KpiCard, MetricRow, EmptyState, WarningBanner, money, moneyShort, pct } from '../widgets';
 import { InfoHint } from '../hints';
 import { CsvReportTools } from '../CsvReportTools';
+import { CharacterPanel } from '../visual/CharacterPanel';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -47,6 +48,9 @@ const TX_LABELS: Record<TransactionType, string> = {
   equipment: 'Оборудование',
   deposit: 'Депозит',
   renovation: 'Ремонт помещения',
+  bonus: 'Премии штату',
+  training: 'Тренинги персонала',
+  insurance: 'Медстраховка',
   other: 'Прочее',
 };
 
@@ -68,6 +72,10 @@ export function FinanceScreen() {
 
   return (
     <div className="space-y-4">
+      {/* Персонаж зоны (PRESENTATION-LAYER §5): Ирина */}
+      <div className="grid gap-4 items-start lg:grid-cols-[280px,1fr]">
+        <CharacterPanel characterId="accountant" vertical />
+        <div className="min-w-0 space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard
           icon={Banknote}
@@ -161,6 +169,7 @@ export function FinanceScreen() {
                 <div>
                   <MetricRow label="Зарплата (gross)" value={money(-pnl.payroll)} hint="laborCost" />
                   <MetricRow label="Соц. взносы (30%)" value={money(-pnl.socialContributions)} hint="laborCost" />
+                  {!!pnl.insurance && <MetricRow label="Медстраховка персонала" value={money(-pnl.insurance)} hint="Медстраховка (экран «Персонал»): 4% недельного ФОТ, снижает риск увольнений" />}
                   <MetricRow label="Аренда (начислено)" value={money(-pnl.rentAccrued)} />
                   <MetricRow label="Коммунальные (начислено)" value={money(-pnl.utilitiesAccrued)} />
                   <MetricRow label="Маркетинг" value={money(-pnl.marketing)} />
@@ -252,6 +261,8 @@ export function FinanceScreen() {
           <b className="text-stone-800">Транзакции</b> — каждая операция по кассе. Ресторан может быть
           прибыльным и одновременно терять деньги на счёте.
         </p>
+      </div>
+        </div>
       </div>
     </div>
   );

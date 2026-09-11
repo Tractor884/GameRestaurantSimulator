@@ -15,6 +15,7 @@ import { DAYS_RU } from '@/lib/game/engine';
 import { HallScene } from '../HallScene';
 import { TutorialCoach } from '../TutorialCoach';
 import { GoalsPanel } from '../GoalsPanel';
+import { RestaurantScene } from '../visual/RestaurantScene';
 import {
   Users,
   Banknote,
@@ -27,10 +28,13 @@ import {
   Hourglass,
   DoorOpen,
   MapPin,
+  ImageIcon,
 } from 'lucide-react';
 
 export function RestaurantScreen() {
   const state = useGame((s) => s.state)!;
+  const setMainView = useGame((s) => s.setMainView);
+  const mainView = state.options?.mainView ?? 'report';
   const restaurant = state.restaurant!;
   const lastDay = state.lastDayResult;
   const lastWeek = state.history.weekStats[state.history.weekStats.length - 1];
@@ -108,22 +112,31 @@ export function RestaurantScreen() {
       {dayWarnings.length > 0 && <WarningBanner warnings={dayWarnings} />}
 
       <div className="grid lg:grid-cols-3 gap-4">
-        {/* Отчёт последнего дня + SVG-сцена зала (ТЗ §31.1) — табы */}
+        {/* Отчёт дня / живая сцена (§31.1) / план зала — табы (выбор запоминается) */}
         <div className="lg:col-span-2">
-        <Tabs defaultValue="report">
+        <Tabs value={mainView} onValueChange={(v) => setMainView(v as 'report' | 'scene' | 'hall')}>
           <TabsList className="mb-3">
             <TabsTrigger value="report" className="gap-1.5">
               <DoorOpen className="h-3.5 w-3.5" aria-hidden />
               {lastDay ? `День: ${dayLabel}` : 'Отчёт дня'}
             </TabsTrigger>
+            <TabsTrigger value="scene" className="gap-1.5">
+              <ImageIcon className="h-3.5 w-3.5" aria-hidden />
+              Сцена
+            </TabsTrigger>
             <TabsTrigger value="hall" className="gap-1.5">
               <MapPin className="h-3.5 w-3.5" aria-hidden />
-              Зал ресторана
+              План зала
             </TabsTrigger>
           </TabsList>
           <TabsContent value="hall">
             <SectionCard title="Зал ресторана — план на день" icon={MapPin}>
               <HallScene />
+            </SectionCard>
+          </TabsContent>
+          <TabsContent value="scene">
+            <SectionCard title="Зал ресторана — живая сцена" icon={ImageIcon}>
+              <RestaurantScene />
             </SectionCard>
           </TabsContent>
           <TabsContent value="report">

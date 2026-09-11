@@ -195,7 +195,7 @@ export function createGame(opts: SetupOptions): GameState {
     phase: 'managing',
     status: 'open',
     difficultyId: diff.id,
-    options: { middayPause: true },
+    options: { middayPause: true, builtinIllustrations: false, mainView: 'report' },
     restaurant,
     history: {
       dayLogs: [],

@@ -32,6 +32,19 @@ export {
 } from './setup';
 export type { SetupOptions, ActionResult } from './setup';
 export {
+  payBonus,
+  trainRole,
+  setInsurance,
+  bonusCost,
+  trainingCost,
+  insuranceWeeklyCost,
+  weeklyPayrollEstimate,
+  absoluteDay,
+  BONUS_COOLDOWN_DAYS,
+  TRAINING_COOLDOWN_DAYS,
+  INSURANCE_PAYROLL_SHARE,
+} from './welfare';
+export {
   availableQuantity,
   maxPortions,
   buildAutoOrder,

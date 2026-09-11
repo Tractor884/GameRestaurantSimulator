@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { Wrench, ChefHat, Coffee, Utensils, TriangleAlert } from 'lucide-react';
 import type { EquipmentLevel } from '@/lib/game/types';
+import { CharacterPanel } from '../visual/CharacterPanel';
 
 type ZoneId = 'kitchen' | 'coffee' | 'hall';
 
@@ -57,6 +58,10 @@ export function EquipmentScreen() {
 
   return (
     <div className="space-y-4">
+      {/* Персонаж зоны (PRESENTATION-LAYER §5): Николай */}
+      <div className="grid gap-4 items-start lg:grid-cols-[280px,1fr]">
+        <CharacterPanel characterId="technician" vertical />
+        <div className="min-w-0 space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard
           icon={Wrench}
@@ -95,6 +100,8 @@ export function EquipmentScreen() {
         {ZONES.map((zone) => (
           <ZoneCard key={zone.id} zone={zone} />
         ))}
+      </div>
+        </div>
       </div>
     </div>
   );
