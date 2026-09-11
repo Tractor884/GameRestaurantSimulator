@@ -29,6 +29,8 @@ export {
   resolveEvent,
   autoOrderAction,
   setAutoPurchase,
+  setProcurementPolicy,
+  replyToReviews,
 } from './setup';
 export type { SetupOptions, ActionResult } from './setup';
 export {
@@ -50,6 +52,9 @@ export {
   buildAutoOrder,
   estimateIngredientNeeds,
 } from './inventory';
+export { PROCUREMENT, PROC_LABELS, activeProcurement, procAutoCoverDays } from '../config/procurement.config';
+export { REVIEWS_V2, reviewNeedsReply, unansweredConvFactor } from '../config/reviews.config';
+export type { ProcurementPolicyId } from '../types';
 export { computeForecast } from './forecast';
 export { computeBSCFromState } from './bsc';
 export { checkInvariants } from './invariants';

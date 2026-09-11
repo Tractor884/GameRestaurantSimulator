@@ -60,7 +60,8 @@ export type RoleId =
   | 'waiter'
   | 'hostess'
   | 'cleaner'
-  | 'dishwasher';
+  | 'dishwasher'
+  | 'secretary'; // админ-роль: бумаги/юр. риск (БАЛ v2 §backlog)
 
 export type DishCategory =
   | 'breakfast'
@@ -188,9 +189,23 @@ export interface PurchaseOrder {
   urgent: boolean;
 }
 
+/** Режим закупки (БАЛ-v2 §9, «механизм G»): политика снабжения. */
+export type ProcurementPolicyId = 'economy' | 'standard' | 'premium';
+
+export interface ProcurementState {
+  /** Активный режим (влияет на цены/качество входа/сроки/порчу/сбои/цель автозаказа). */
+  policy: ProcurementPolicyId;
+  /** Переключение в работе: оплачено, активация через switchLagWeeks. */
+  pendingSwitch: { to: ProcurementPolicyId; orderedAt: number } | null;
+}
+
 export interface InventoryState {
   batches: InventoryBatch[];
   pendingOrders: PurchaseOrder[]; // оплачено, ждём доставки
+  /** Режим закупки (БАЛ-v2 §9; миграция v7 — дефолт standard). */
+  procurement?: ProcurementState;
+  /** Сбои поставки за текущую неделю (телеметрия склада, БАЛ-v2 §9). */
+  supplyErrorsWeek?: number;
 }
 
 /** Смена: утро 08–16, вечер 15–23 (пересечение 15–16 для передачи). */
@@ -290,6 +305,8 @@ export interface ReputationState {
   /** Счётчик отзывов — В GameState (аудит §6.1): раньше был module-level и
    * после загрузки сейва id отзывов дублировались. */
   reviewCounter: number;
+  /** Неотвеченные отзывы ≤3,5★ (БАЛ-v2 §8 «механизм D»; миграция v7). */
+  unansweredNeg?: number;
 }
 
 export interface ServedCohort {
@@ -458,6 +475,8 @@ export interface DayLog {
   events: GameEvent[];
   riskChanges: RiskChange[];
   warnings: string[];
+  /** Сбои поставки за день (БАЛ-v2 §9, только при >0). */
+  supplyErrors?: number;
 }
 
 export interface WeekStat {
@@ -665,6 +684,8 @@ export interface DaySimulationResult {
   invariantReport: InvariantReport;
   /** Экстренные решения, применённые в течение этого дня (пауза §8.4). */
   emergencyActions?: EmergencyActionId[];
+  /** Сбои поставки за день (БАЛ-v2 §9, только при >0). */
+  supplyErrors?: number;
 }
 
 export interface InvariantReport {

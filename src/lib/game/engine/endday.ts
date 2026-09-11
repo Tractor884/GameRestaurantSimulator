@@ -16,13 +16,14 @@ import type {
 import { SEGMENTS, SEGMENT_IDS } from '../config/segments.config';
 import { REPUTATION_CONFIG } from '../config/reputation.config';
 import { RETURNS_CONFIG } from '../config/returns.config';
-import { REVIEW_CHANNELS, REVIEW_SOURCES, REVIEW_SOURCES_MAP, pickReviewTemplate } from '../config/reviews.config';
+import { REVIEW_CHANNELS, REVIEW_SOURCES, REVIEW_SOURCES_MAP, pickReviewTemplate, unansweredReturningFactor } from '../config/reviews.config';
 import { EVENT_CONFIG, EVENT_TEMPLATES, type EventTemplate } from '../config/risks.config';
 import { DIFFICULTIES } from '../config/difficulty.config';
 import { CLEANING } from '../config/marketing.config';
 import { RENOVATION_LEVELS, EQUIPMENT_LEVELS } from '../config/premises.config';
 import { MARKETING_CHANNELS_MAP } from '../config/marketing.config';
 import { RISK_LIMITS } from '../config/risks.config';
+import { SECRETARY_EFFECTS } from '../config/staffRoles.config';
 import type { Rng } from '../rng';
 import { clamp, dayIndex, addTransaction } from './core';
 
@@ -175,6 +176,9 @@ export function returningDemandForDay(
     youth: 0, tourist: 0, premium: 0, evening: 0,
   } as Record<SegmentId, number>;
   const todayIdx = dayIndex(date);
+  // БАЛ-v2 §8 (механизм D): возвратность −0,2 п.п. за каждые 5 неотвеченных
+  // (кап −3 п.п.) — накопленные жалобы отпугивают постоянных гостей.
+  const retFactor = unansweredReturningFactor(restaurant.reputation.unansweredNeg ?? 0);
   const surviving: typeof restaurant.customerMemory.cohorts = [];
   for (const cohort of restaurant.customerMemory.cohorts) {
     cohort.ageDays = todayIdx - dayIndex(cohort.date);
@@ -192,8 +196,8 @@ export function returningDemandForDay(
       continue;
     }
     const decay = Math.pow(RETURNS_CONFIG.decayFactorPerWeek, ageWeeks);
-    // Равномерно по дням окна задержки: P/окно × затухание.
-    const guests = (cohort.remainingReturnPotential / window) * decay;
+    // Равномерно по дням окна задержки: P/окно × затухание × фактор отзывов (§8).
+    const guests = (cohort.remainingReturnPotential / window) * decay * retFactor;
     out[cohort.segmentId] += guests;
     surviving.push(cohort);
   }
@@ -410,7 +414,17 @@ export function applyEventEffects(state: GameState, restaurant: Restaurant, even
     if (e.cash > 0) {
       addTransaction(restaurant, event.date, 'other', e.cash, 'in', `Событие: ${event.title}`);
     } else {
-      addTransaction(restaurant, event.date, 'fine', -e.cash, 'out', `Событие: ${event.title}`);
+      // СЕКРЕТАРЬ: бумаги поданы вовремя — штрафы проверок/админ. событий −20%
+      // (кап эффекта = 1 секретарь; больше — не стакается). Требует смен в графике.
+      const secretaryCount = restaurant.staff.pools.secretary?.count ?? 0;
+      const secretaryScheduled = (restaurant.staff.schedule.secretary ?? []).some(
+        (sh) => sh.morning + sh.evening > 0,
+      );
+      const fine =
+        secretaryCount > 0 && secretaryScheduled
+          ? Math.round(-e.cash * (1 - SECRETARY_EFFECTS.fineDiscount))
+          : Math.round(-e.cash);
+      addTransaction(restaurant, event.date, 'fine', fine, 'out', `Событие: ${event.title}`);
     }
   }
   if (e.riskDelta) {

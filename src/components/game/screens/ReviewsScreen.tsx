@@ -22,17 +22,21 @@ import {
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { Star, MessageSquare, Flame, ThumbsUp, Filter, MapPin, Megaphone } from 'lucide-react';
+import { Star, MessageSquare, Flame, ThumbsUp, Filter, MapPin, Megaphone, Inbox, Send } from 'lucide-react';
+import { REVIEWS_V2 } from '@/lib/game/config/reviews.config';
 import type { Review, ReviewSourceId, SegmentId } from '@/lib/game/types';
 
 const ALL = 'all';
 
 export function ReviewsScreen() {
   const state = useGame((s) => s.state)!;
+  const replyReviews = useGame((s) => s.replyReviews);
   const restaurant = state.restaurant!;
 
   const rep = restaurant.reputation;
   const reviews = rep.windowReviews;
+  /** БАЛ-v2 §8: счётчик неотвеченных негативных отзывов. */
+  const unanswered = rep.unansweredNeg ?? 0;
 
   // ===== ФИЛЬТРЫ =====
   const [scoreFilter, setScoreFilter] = useState<string[]>([]);
@@ -96,6 +100,48 @@ export function ReviewsScreen() {
           hint="riskReputation"
         />
       </div>
+
+      {/* БАЛ-v2 §8 (механизм D): работа с отзывами — дешёвый рычаг конверсии. */}
+      <SectionCard title="Работа с отзывами" icon={Inbox}>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+          <div className="flex-1 space-y-1.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm text-stone-600">Неотвеченные негативные (≤3,5★):</span>
+              <span
+                className={cn(
+                  'text-lg font-bold tabular-nums',
+                  unanswered > 10 ? 'text-red-700' : unanswered > 0 ? 'text-amber-700' : 'text-emerald-700',
+                )}
+              >
+                {Math.round(unanswered)}
+              </span>
+              {unanswered > 0 && (
+                <Badge variant="secondary" className="bg-red-100 text-red-800">
+                  конверсия −{(Math.min(unanswered, REVIEWS_V2.convCapU) * REVIEWS_V2.convPerUnanswered * 100).toFixed(1)}%
+                </Badge>
+              )}
+              {unanswered > 5 && (
+                <Badge variant="secondary" className="bg-amber-100 text-amber-800">
+                  юр. риск +{(REVIEWS_V2.legalPerUnanswered * Math.min(unanswered, REVIEWS_V2.legalCapU)).toFixed(1)}/нед
+                </Badge>
+              )}
+            </div>
+            <p className="text-xs text-stone-500 max-w-xl">
+              Каждый неотвеченный отзыв снижает конверсию новых гостей (кап −9%), возвратность и накачивает
+              юридический риск. «Ответить» — рабочий день управляющего: счётчик обнуляется, приор рейтинга немного растёт.
+            </p>
+          </div>
+          <Button
+            onClick={replyReviews}
+            disabled={state.phase === 'gameover' || unanswered <= 0}
+            className="h-11 px-5 bg-amber-600 hover:bg-amber-700 text-white shrink-0"
+            aria-label="Ответить на все неотвеченные отзывы"
+          >
+            <Send className="h-4 w-4 mr-2" aria-hidden />
+            Ответить на все ({REVIEWS_V2.replyCost.toLocaleString('ru-RU')} ₽)
+          </Button>
+        </div>
+      </SectionCard>
 
       {/* Распределение оценок + фильтры */}
       <SectionCard title="Оценки и фильтры" icon={Filter}>

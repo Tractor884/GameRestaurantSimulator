@@ -27,6 +27,7 @@ import {
 } from '../config/demandProfiles.config';
 import { MARKETING_CHANNELS_MAP, MARKETING_LIMITS } from '../config/marketing.config';
 import { reputationFactor } from '../config/reputation.config';
+import { unansweredConvFactor } from '../config/reviews.config';
 import { DIFFICULTIES } from '../config/difficulty.config';
 import { dishOf } from '../content/resolve';
 import type { Rng } from '../rng';
@@ -161,7 +162,11 @@ export function hourlyDemand(
   const repFactor = demandReputationFactor(restaurant.reputation.rating);
   const quality = qualityPerceptionFactor(state);
   const eventFactor = eventDemandFactor(state, date.week);
-  const base = loc.baseTraffic * dayProfile * hourProfile * season * holiday * repFactor * eventFactor * loc.competitionFactor;
+  // БАЛ-v2 §8 (механизм D): неотвеченные отзывы ≤3,5★ давят на конверсию
+  // НОВЫХ гостей (−0,6% за каждый, кап −9% при U=15). Возвратные — отдельно
+  // в returningDemandForDay (endday.ts).
+  const convFactor = unansweredConvFactor(restaurant.reputation.unansweredNeg ?? 0);
+  const base = loc.baseTraffic * dayProfile * hourProfile * season * holiday * repFactor * eventFactor * loc.competitionFactor * convFactor;
 
   // Доли сегментов в этот час: baseShare × hourWeight × dayWeight, нормировка.
   const weights: Record<string, number> = {};

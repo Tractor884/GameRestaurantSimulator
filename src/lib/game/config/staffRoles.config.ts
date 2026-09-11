@@ -108,6 +108,16 @@ export const STAFF_ROLES: Record<RoleId, StaffRoleConfig> = {
     stationWeights: {},
     description: 'Чистая посуда = скорость подачи. Не хватает — сервис буксует.',
   },
+  secretary: {
+    id: 'secretary',
+    name: 'Секретарь (офис-менеджер)',
+    shortName: 'Секр.',
+    monthlySalary: 68_000,
+    stationWeights: {},
+    organizationFactor: 1.02,
+    description:
+      'Бумаги и комплаенс: юр. риск −0,9/нед, штрафы проверок −20%, организация смены +2%. По умолчанию НЕ нанят — наймите и поставьте смены в «Графике».',
+  },
 };
 
 export const ROLE_IDS = Object.keys(STAFF_ROLES) as RoleId[];
@@ -150,3 +160,13 @@ export const STAFF_DYNAMICS = {
   quitMoraleThreshold: 35,
   quitChanceAtZeroMorale: 0.08,
 };
+
+/* ====================== СЕКРЕТАРЬ: АДМИН-ЭФФЕКТЫ ====================== */
+
+/** Эффекты офис-менеджера (юр. поддержка/комплаенс). */
+export const SECRETARY_EFFECTS = {
+  /** Доп. снижение юр. риска за неделю (× min(2, численность)). */
+  legalRelaxPerWeek: 0.9,
+  /** Скидка на штрафы проверок/бумажных событий (доля). */
+  fineDiscount: 0.2,
+} as const;

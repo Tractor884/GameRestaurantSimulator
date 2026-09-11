@@ -55,6 +55,8 @@ import {
   updateEquipmentWear,
 } from './endday';
 import { checkInvariants } from './invariants';
+import { reviewNeedsReply } from '../config/reviews.config';
+import { activeProcurement, procAutoCoverDays } from '../config/procurement.config';
 
 /** Накопители дня (двигаются по часам; при паузе — замораживаются в контексте). */
 export interface DayTotals {
@@ -89,7 +91,9 @@ export interface DayRunContext {
   seatsBusy: number;
   totals: DayTotals;
   returningDay: Record<SegmentId, number>;
-  rngs: { demand: Rng; orders: Rng; reviews: Rng; events: Rng };
+  rngs: { demand: Rng; orders: Rng; reviews: Rng; events: Rng; supply: Rng };
+  /** БАЛ-v2 §9: сбои поставки за день (телеметрия склада/UI). */
+  supplyErrors: number;
   /** Модификаторы экстренных решений (§8.4): применяются к ОСТАВШИМСЯ часам. */
   emergency: {
     applied: EmergencyActionId[];
@@ -154,11 +158,18 @@ export function startDayRun(state: GameState, seed: number): { draft: GameState;
       orders: deriveRng(daySeed, 'orders'),
       reviews: deriveRng(daySeed, 'reviews'),
       events: deriveRng(daySeed, 'events'),
+      // БАЛ-v2 §9: ОТДЕЛЬНЫЙ поток сбоев поставки — не сдвигает
+      // детерминизм существующих бросков дня (§21 «не трогаем rng»).
+      supply: deriveRng(daySeed, 'supply'),
     },
+    supplyErrors: 0,
     emergency: { applied: [], demandLift: 1, discount: 0, satisfactionBonus: 0, tempStopList: [] },
   };
 
-  processDeliveries(restaurant, date);
+  // БАЛ-v2 §9: доставки со сбоем поставки (режим закупки), телеметрия в день.
+  const delivery = processDeliveries(restaurant, date, run.rngs.supply);
+  run.supplyErrors = delivery.supplyErrors;
+  restaurant.inventory.supplyErrorsWeek = (restaurant.inventory.supplyErrorsWeek ?? 0) + delivery.supplyErrors;
 
   // КАМПАНИИ: завершение по сроку (ТЗ §21.6). Раньше кампания жила вечно —
   // «осталось 0 недель», но бейдж «Активна» и списание бюджета продолжались.
@@ -176,12 +187,15 @@ export function startDayRun(state: GameState, seed: number): { draft: GameState;
 
   // Автозаказ «завхоза» (ТЗ §12.5): нормальная доставка с лагом 1 день,
   // скоропорт ограничен сроком годности (анти-спираль порчи).
+  // БАЛ-v2 §9: цель покрытия — из режима закупки (эконом 1,5 / стандарт 2,0
+  // (= дефолт движка) / премиум 3,5 дн).
   if (restaurant.marketing.autoPurchase?.enabled) {
     const logs = draft.history.dayLogs;
     const recentGuests = logs.slice(-3).reduce((s, l) => s + l.kpi.guests, 0) / Math.max(1, Math.min(3, logs.length));
     const loc = LOCATIONS_MAP[restaurant.locationId];
     const expected = recentGuests > 10 ? recentGuests : loc.baseTraffic * 0.75;
-    const order = buildAutoOrder(restaurant, restaurant.marketing.autoPurchase.coverDays, expected);
+    const coverDays = procAutoCoverDays(activeProcurement(restaurant));
+    const order = buildAutoOrder(restaurant, coverDays, expected);
     let total = 0;
     const placed: typeof restaurant.inventory.pendingOrders = [];
     for (const item of order) {
@@ -343,6 +357,13 @@ export function finishDay(
   // у «Профессионала» рейтинг живее реагирует на свежие отзывы (§6.8 паспорта).
   const reviews: Review[] = generateReviews(restaurant, date, totals.seatedBySegment, satisfaction, rngs.reviews);
   addReviews(restaurant, reviews, date, DIFFICULTIES[draft.difficultyId]?.reputationSpeed ?? 1);
+  // БАЛ-v2 §8 (механизм D): неотвеченные отзывы копятся каждый день (порог
+  // «требует ответа» — 3,5★ и ниже, врезка калибровки §8). Игнор работы с
+  // репутацией → конверсия/возвратность (в demand/endday) + юр. риск (weekclose).
+  {
+    const negToday = reviews.filter((r) => reviewNeedsReply(r.score)).length;
+    restaurant.reputation.unansweredNeg = (restaurant.reputation.unansweredNeg ?? 0) + negToday;
+  }
 
   // Возвратные когорты (ТЗ §17).
   createCohorts(restaurant, date, totals.seatedBySegment, satisfaction);
@@ -439,6 +460,7 @@ export function finishDay(
     events,
     riskChanges,
     warnings,
+    supplyErrors: run.supplyErrors > 0 ? run.supplyErrors : undefined,
   });
   while (draft.history.dayLogs.length > 7) draft.history.dayLogs.shift();
 
@@ -469,6 +491,7 @@ export function finishDay(
     warnings,
     invariantReport,
     emergencyActions: emergency.applied.length > 0 ? [...emergency.applied] : undefined,
+    supplyErrors: run.supplyErrors > 0 ? run.supplyErrors : undefined,
   };
 
   draft.lastDayResult = result;

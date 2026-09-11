@@ -33,11 +33,14 @@ import {
   resolveEvent,
   autoOrderAction,
   setAutoPurchase,
+  setProcurementPolicy,
+  replyToReviews,
   payBonus,
   trainRole,
   setInsurance,
   type SetupOptions,
   type ActionResult,
+  type ProcurementPolicyId,
 } from '@/lib/game/engine';
 import type { DayRunContext } from '@/lib/game/engine';
 
@@ -126,6 +129,10 @@ interface GameStore {
   training(roleId: RoleId): void;
   /** Благосостояние (v6): вкл/выкл медстраховки. */
   insuranceSet(enabled: boolean): void;
+  /** БАЛ-v2 §8 (механизм D): ответить на все неотвеченные отзывы (15 тыс ₽). */
+  replyReviews(): void;
+  /** БАЛ-v2 §9 (G-режимы): переключить режим закупки (50 тыс ₽, лаг 2 нед). */
+  procurementSet(policy: ProcurementPolicyId): void;
   license(): void;
   loanRepay(loanIndex: number, amount: number): void;
   resolveCritical(eventId: string, resolutionIndex: number): void;
@@ -330,6 +337,8 @@ export const useGame = create<GameStore>((set, get) => ({
   bonus: () => get().apply((st) => payBonus(st)),
   training: (roleId) => get().apply((st) => trainRole(st, roleId)),
   insuranceSet: (enabled) => get().apply((st) => setInsurance(st, enabled)),
+  replyReviews: () => get().apply((st) => replyToReviews(st)),
+  procurementSet: (policy) => get().apply((st) => setProcurementPolicy(st, policy)),
   license: () => get().apply((st) => buyAlcoholLicense(st)),
   loanRepay: (loanIndex, amount) => get().apply((st) => repayLoan(st, loanIndex, amount)),
   resolveCritical: (eventId, resolutionIndex) =>
@@ -432,7 +441,9 @@ export const useGame = create<GameStore>((set, get) => ({
  *  меню (customDishes, CSV-импорт §35.3–35.4).
  *  v4 → v5: визуальный слой — встроенные иллюстрации (по умолчанию ВЫКЛ:
  *  приоритет у пользовательских загрузок) и вкладка главного экрана.
- *  v6: благосостояние — страховка/кулдауны премий и тренингов. */
+ *  v6: благосостояние — страховка/кулдауны премий и тренингов.
+ *  v7: БАЛ-v2 — режим закупки (§9, старт standard), неотвеченные отзывы
+ *  (§8) и роль «секретарь» (админ-роль, стартует не нанятой). */
 function migrateState(state: GameState): void {
   const r = state.restaurant;
   // v4: настройки геймплея.
@@ -445,6 +456,18 @@ function migrateState(state: GameState): void {
     if (r.staff.insurance == null) r.staff.insurance = false;
     if (r.staff.lastBonusDay == null) r.staff.lastBonusDay = -999;
     if (r.staff.trainedAt == null) r.staff.trainedAt = {};
+    // v7: БАЛ-v2 §8 — счётчик неотвеченных отзывов.
+    if (r.reputation.unansweredNeg == null) r.reputation.unansweredNeg = 0;
+    // v7: БАЛ-v2 §9 — режим закупки (standard = прежняя экономика).
+    if (!r.inventory.procurement) r.inventory.procurement = { policy: 'standard', pendingSwitch: null };
+    if (r.inventory.supplyErrorsWeek == null) r.inventory.supplyErrorsWeek = 0;
+    // v7: секретарь — новая роль: пул/график нулевые (не нанят).
+    if (!r.staff.pools.secretary) {
+      r.staff.pools.secretary = { count: 0, fatigue: 0, morale: 70, newHires: 0 };
+    }
+    if (!r.staff.schedule.secretary) {
+      r.staff.schedule.secretary = [0, 1, 2, 3, 4, 5, 6].map(() => ({ morning: 0, evening: 0 }));
+    }
   }
   if (r) {
     // v4: кастомные блюда (CSV-импорт новых блюд §35.3–35.4).

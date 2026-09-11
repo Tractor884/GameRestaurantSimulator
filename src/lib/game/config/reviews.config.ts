@@ -91,3 +91,47 @@ export function pickReviewTemplate(score: number, index: number): ReviewTemplate
   const pool = REVIEW_TEMPLATES.filter((t) => t.score === band);
   return pool[Math.abs(index) % pool.length];
 }
+
+/* ==================== БАЛ-v2 §8 «МЕХАНИЗМ D»: НЕОТВЕЧЕННЫЕ ОТЗЫВЫ ==================== */
+
+/**
+ * Игнор работы с репутацией стоит конверсии и юридических рисков;
+ * ответы — дешёвый, но реальный инструмент (порт из ветки v1.0.0,
+ * калибровка гейтов этапа 2: S0 пассив U=34 к концу года → LegalRisk 100,
+ * конверсия −9%; сценарий C: Δ рейтинга −0,64).
+ */
+export const REVIEWS_V2 = {
+  /** Порог «требует ответа»: score ≤ 3,5★ (врезка калибровки §8: у здорового
+   *  ресторана 1–2★ почти не выпадают — счётчик бы не копился). */
+  negThreshold: 3.5,
+  /** Юр. риск в неделю за каждый неотвеченный (кап прироста от U). */
+  legalPerUnanswered: 0.3,
+  legalCapU: 30,
+  /** Конверсия новых гостей: −0,6% за каждый U (кап −9%). */
+  convPerUnanswered: 0.006,
+  convCapU: 15,
+  /** Возвратность: −0,2 п.п. за каждые 5 U (кап −3 п.п.). */
+  retPerFive: 0.002,
+  retCap: 0.03,
+  /** Стоимость «Ответить на отзывы» (рабочее время управляющего). */
+  replyCost: 15_000,
+  /** Прирост приора рейтинга за ответ (капы против фарма). */
+  replyRatingPerU: 0.013,
+  replyRatingCapU: 5,
+  replyRatingMax: 0.05,
+} as const;
+
+/** v2 §8: порог «отзыв требует ответа» (калибровка: 3,5★). */
+export function reviewNeedsReply(score: number): boolean {
+  return score <= REVIEWS_V2.negThreshold;
+}
+
+/** v2 §8: множитель конверсии НОВЫХ гостей от неотвеченных отзывов (кап −9%). */
+export function unansweredConvFactor(u: number): number {
+  return Math.max(0.5, 1 - REVIEWS_V2.convPerUnanswered * Math.min(u, REVIEWS_V2.convCapU));
+}
+
+/** v2 §8: множитель возвратности (кап −3 п.п.). */
+export function unansweredReturningFactor(u: number): number {
+  return Math.max(1 - REVIEWS_V2.retCap, 1 - REVIEWS_V2.retPerFive * u);
+}

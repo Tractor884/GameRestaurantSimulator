@@ -9,10 +9,11 @@
  * Кухня: станции ограничивают исполнение (StationFulfillmentRate).
  * Официанты: ServiceFulfillmentRate ограничивает обслуженных гостей.
  */
-import type { Dish, GameDate, HourLog, Restaurant, SegmentId, StationType, GameState } from '../types';
+import type { Dish, GameDate, HourLog, Restaurant, SegmentId, StationType, GameState, ProcurementPolicyId } from '../types';
 import { SEGMENTS, SEGMENT_IDS } from '../config/segments.config';
 import { dishOf } from '../content/resolve';
 import { MENU_CATEGORIES } from '../config/menu.config';
+import { activeProcurement, procInputQuality } from '../config/procurement.config';
 import { QUEUE_CONFIG, dayPeriod } from '../config/queue.config';
 import { SATISFACTION } from '../config/satisfaction.config';
 import { DIFFICULTIES } from '../config/difficulty.config';
@@ -241,6 +242,8 @@ function generateOrders(
   const serviceFulfillment = guestsSeated > 0 ? Math.min(1, waiterCap / guestsSeated) : 1;
 
   // Исполнение: FIFO-списание и выручка только по факту (ТЗ §14.9).
+  // БАЛ-v2 §9: режим закупки (эконом ↔ премиум) — качество входа в поданных блюдах.
+  const policy: ProcurementPolicyId = activeProcurement(restaurant);
   let qualitySum = 0;
   let countSum = 0;
   for (const p of picks) {
@@ -258,7 +261,9 @@ function generateOrders(
     result.cogs += consumeForDish(restaurant.inventory, p.dish, portionsActual);
     result.itemsSold += portionsActual;
     result.dishesSold[p.dish.id] = (result.dishesSold[p.dish.id] ?? 0) + portionsActual;
-    qualitySum += p.dish.baseQuality * portionsActual;
+    // БАЛ-v2 §9: качество входа (режим закупки эконом↔премиум) сдвигает качество
+    // поданного — средний чек не растёт, удовлетворённость/рейтинг реагируют.
+    qualitySum += Math.max(0, p.dish.baseQuality + procInputQuality(policy, p.dish.category)) * portionsActual;
     countSum += portionsActual;
   }
   result.avgDishQuality = countSum > 0 ? qualitySum / countSum : 0;

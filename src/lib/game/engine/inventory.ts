@@ -10,6 +10,14 @@ import type { Dish, GameDate, InventoryBatch, InventoryState, Restaurant } from 
 import { INGREDIENTS_MAP } from '../content/ingredients';
 import { dishOf } from '../content/resolve';
 import { STORAGE_LOSS_PER_DAY, THEFT, URGENT_PURCHASE_MARKUP } from '../config/finance.config';
+import {
+  activeProcurement,
+  procPriceMult,
+  procShelfLifeMult,
+  procSupplyErrorChance,
+  procSpoilRates,
+} from '../config/procurement.config';
+import type { Rng } from '../rng';
 import { dayIndex } from './core';
 
 /** Доступно ли количество ингредиента (с учётом всех партий FIFO). */
@@ -97,7 +105,8 @@ export function placePurchase(
   date: GameDate,
 ): { unitCost: number; paid: number; arrivesAt: GameDate } {
   const ing = INGREDIENTS_MAP[ingredientId];
-  const baseCost = ing.baseCost;
+  // БАЛ-v2 §9: цены × множитель режима закупки (эконом ×0,93 / премиум ×1,03).
+  const baseCost = ing.baseCost * procPriceMult(activeProcurement(restaurant));
   const unitCost = urgent ? baseCost * (1 + URGENT_PURCHASE_MARKUP) : baseCost;
   const paid = Math.round(unitCost * quantity);
   const arrivesAt: GameDate = urgent
@@ -117,9 +126,20 @@ export function placePurchase(
   return { unitCost, paid, arrivesAt };
 }
 
-/** Доставить заказы, пришедшие к этому дню. Возвращает стоимость доставки. */
-export function processDeliveries(restaurant: Restaurant, date: GameDate): number {
+/** Доставить заказы, пришедшие к этому дню. Возвращает стоимость доставки
+ *  и число сбоев поставки. БАЛ-v2 §9: срок годности партий — в ДНЯХ (не
+ *  неделях: иначе множители режима не действуют для скоропорта 1–7 дней);
+ *  rng (ОТДЕЛЬНЫЙ поток 'supply' от дня-симуляции) кидает недовоз/брак —
+ *  эконом чаще, премиум реже. При сбое оплатили всё, пришло ×0,75. */
+export function processDeliveries(
+  restaurant: Restaurant,
+  date: GameDate,
+  rng?: Rng,
+): { value: number; supplyErrors: number } {
   const inv = restaurant.inventory;
+  const policy = activeProcurement(restaurant);
+  const shelfMult = procShelfLifeMult(policy);
+  const errorChance = procSupplyErrorChance(policy);
   const arrived: typeof inv.pendingOrders = [];
   const still: typeof inv.pendingOrders = [];
   for (const order of inv.pendingOrders) {
@@ -128,23 +148,29 @@ export function processDeliveries(restaurant: Restaurant, date: GameDate): numbe
   }
   inv.pendingOrders = still;
   let value = 0;
+  let supplyErrors = 0;
   for (const order of arrived) {
     const ing = INGREDIENTS_MAP[order.ingredientId];
-    const expiresAt: GameDate = {
-      week: date.week + Math.ceil(ing.shelfLifeDays / 7),
-      day: date.day,
-      hour: 8,
-    };
+    // v2 §9: недовоз/брак — виден через стоп-листы и счётчик сбоев на складе.
+    let quantity = order.quantity;
+    if (rng && errorChance > 0 && rng.chance(errorChance)) {
+      quantity = order.quantity * 0.75;
+      supplyErrors++;
+    }
+    // v2 §9: срок годности — в ДНЯХ с множителем режима (эконом ×0,8 / премиум ×1,2).
+    const shelfDays = Math.max(1, Math.round(ing.shelfLifeDays * shelfMult));
+    const expIdx = dayIndex(date) + shelfDays;
+    const expiresAt: GameDate = { week: Math.floor(expIdx / 7) + 1, day: expIdx % 7, hour: 8 };
     inv.batches.push({
       ingredientId: order.ingredientId,
-      quantity: order.quantity,
+      quantity,
       unitCost: order.unitCost,
       arrivedAt: { ...date, hour: 8 },
       expiresAt,
     });
     value += order.paid;
   }
-  return value;
+  return { value, supplyErrors };
 }
 
 /**
@@ -174,9 +200,11 @@ export function processEndOfDayLosses(
     }
     // Близкая экспирация: партия умрёт в ближайшие 2 дня (для сан. риска).
     if (dayIndex(batch.expiresAt) - todayIdx <= 2) nearExpiryCount++;
-    // 2. Естественные потери при хранении.
+    // 2. Естественные потери при хранении (× режим закупки §9: эконом
+    //    +0,15%/день, премиум ×0,6 — «порча съедает скидку» при запасах впрок).
     const ing = INGREDIENTS_MAP[batch.ingredientId];
-    const lossRate = STORAGE_LOSS_PER_DAY[ing?.storage ?? 'dry'];
+    const spoil = procSpoilRates(activeProcurement(restaurant));
+    const lossRate = STORAGE_LOSS_PER_DAY[ing?.storage ?? 'dry'] * spoil.mult + spoil.add;
     const loss = Math.min(batch.quantity, batch.quantity * lossRate);
     batch.quantity -= loss;
     wasteCost += loss * batch.unitCost;

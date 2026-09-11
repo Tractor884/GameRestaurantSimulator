@@ -62,8 +62,11 @@ export function organizationFactor(staff: StaffState, day: number, hour: number)
   let f = 0.92; // без руководителей — хаос
   const manager = staffOnDuty(staff, 'manager', day, hour);
   const chef = staffOnDuty(staff, 'head_chef', day, hour);
+  const secretary = staffOnDuty(staff, 'secretary', day, hour);
   if (manager > 0) f += (STAFF_ROLES.manager.organizationFactor ?? 1.1) - 1;
   if (chef > 0) f += (STAFF_ROLES.head_chef.organizationFactor ?? 1.08) - 1;
+  // Секретарь: лёгкая админ-поддержка смены (бумаги/бронь/снабжение не буксуют).
+  if (secretary > 0) f += (STAFF_ROLES.secretary.organizationFactor ?? 1.02) - 1;
   return Math.min(1.2, f);
 }
 

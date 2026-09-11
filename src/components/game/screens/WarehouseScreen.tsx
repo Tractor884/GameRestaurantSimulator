@@ -9,6 +9,8 @@ import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, KpiCard, EmptyState, money, moneyShort } from '../widgets';
 import { INGREDIENTS_MAP, INGREDIENT_CATEGORIES } from '@/lib/game/content/ingredients';
 import { dayIndex } from '@/lib/game/engine';
+import { PROCUREMENT, PROC_LABELS, activeProcurement, procAutoCoverDays } from '@/lib/game/config/procurement.config';
+import type { ProcurementPolicyId } from '@/lib/game/types';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -29,6 +31,8 @@ import {
   Zap,
   ChevronDown,
   Sparkles,
+  Package,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface StockRow {
@@ -48,7 +52,14 @@ export function WarehouseScreen() {
   const purchase = useGame((s) => s.purchase);
   const autoOrder = useGame((s) => s.autoOrder);
   const autoPurchaseSet = useGame((s) => s.autoPurchaseSet);
+  const procurementSet = useGame((s) => s.procurementSet);
   const disabled = state.phase === 'gameover';
+
+  // БАЛ-v2 §9: режим закупки + телеметрия сбоев поставок.
+  const policy = activeProcurement(restaurant);
+  const pendingSwitch = restaurant.inventory.procurement?.pendingSwitch ?? null;
+  const supplyErrorsWeek = restaurant.inventory.supplyErrorsWeek ?? 0;
+  const coverTarget = procAutoCoverDays(policy);
 
   const nowIdx = (state.week - 1) * 7 + state.day;
   const lastWeek = state.history.weekStats[state.history.weekStats.length - 1];
@@ -139,12 +150,100 @@ export function WarehouseScreen() {
         />
       </div>
 
+      {/* Режим закупки (БАЛ-v2 §9 G-режимы) */}
+      <SectionCard title="Режим закупки" icon={Package}>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {([
+            {
+              id: 'economy' as ProcurementPolicyId,
+              price: '−7% к ценам входа',
+              pros: ['дешевле вход'],
+              cons: ['качество блюд −7', 'сроки годности ×0,8', 'брак поставок чаще', 'порча выше'],
+              tone: 'text-emerald-700',
+            },
+            {
+              id: 'standard' as ProcurementPolicyId,
+              price: 'базовые цены',
+              pros: ['рабочая база', 'автозаказ 2 дн'],
+              cons: ['без преимуществ'],
+              tone: 'text-stone-700',
+            },
+            {
+              id: 'premium' as ProcurementPolicyId,
+              price: '+3% к ценам входа',
+              pros: ['качество блюд +5', 'сроки годности ×1,2', 'брак поставок реже', 'порча −40%'],
+              cons: ['дороже вход'],
+              tone: 'text-amber-700',
+            },
+          ]).map((mode) => {
+            const active = policy === mode.id;
+            const switching = pendingSwitch?.to === mode.id;
+            return (
+              <button
+                key={mode.id}
+                type="button"
+                disabled={disabled || switching}
+                onClick={() => procurementSet(mode.id)}
+                className={cn(
+                  'text-left rounded-xl border p-4 space-y-2 transition-all min-h-11',
+                  active
+                    ? 'border-amber-500 bg-amber-50 shadow-sm'
+                    : 'border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50',
+                  switching && 'border-dashed border-amber-400 bg-amber-50/60',
+                )}
+                aria-pressed={active}
+                aria-label={`Режим закупки: ${PROC_LABELS[mode.id].title}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className={cn('font-semibold', mode.tone)}>{PROC_LABELS[mode.id].title}</span>
+                  {active && <Badge className="bg-amber-600 text-white">Активен</Badge>}
+                  {switching && (
+                    <Badge variant="secondary" className="bg-amber-100 text-amber-800">
+                      С недели {pendingSwitch!.orderedAt + PROCUREMENT.switchLagWeeks}
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-xs text-stone-500 tabular-nums">{mode.price}</p>
+                <ul className="text-xs space-y-0.5">
+                  {mode.pros.map((p) => (
+                    <li key={p} className="text-emerald-700 flex items-center gap-1">
+                      <span aria-hidden>+</span>
+                      {p}
+                    </li>
+                  ))}
+                  {mode.cons.map((c) => (
+                    <li key={c} className="text-stone-500 flex items-center gap-1">
+                      <span aria-hidden>−</span>
+                      {c}
+                    </li>
+                  ))}
+                </ul>
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-xs text-stone-500 mt-2">
+          {pendingSwitch
+            ? `Переключение на «${PROC_LABELS[pendingSwitch.to].title}» в работе: контракт вступит в силу на неделе ${pendingSwitch.orderedAt + PROCUREMENT.switchLagWeeks} (переговоры + подписание).`
+            : `Переключение — ${PROCUREMENT.switchCost.toLocaleString('ru-RU')} ₽ разово, вступает в силу через ${PROCUREMENT.switchLagWeeks} нед. Цель автозаказа: ${coverTarget} дн.`}
+        </p>
+        {supplyErrorsWeek > 0 && (
+          <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-2.5 mt-2">
+            <AlertTriangle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" aria-hidden />
+            <p className="text-xs text-red-800">
+              Сбои поставок за неделю: {supplyErrorsWeek} — пришли не всё (оплачено полностью). Эконом-режим
+              ошибается чаще: держите страховой запас или перейдите на стандарт/премиум.
+            </p>
+          </div>
+        )}
+      </SectionCard>
+
       {/* Автозаказ */}
       <SectionCard title="Автозаказ" icon={Sparkles}>
         <div className="flex flex-wrap items-center gap-3">
           <p className="text-sm text-stone-600 flex-1 min-w-[220px]">
             Считает потребность по блюдам в меню и средним продажам, докупает ровно на указанный
-            горизонт. Заказ придёт завтра по обычным ценам.
+            горизонт. Заказ придёт завтра по ценам режима закупки (сейчас ×{PROCUREMENT.priceMult[policy]}).
           </p>
           <Button
             variant="outline"
@@ -173,8 +272,9 @@ export function WarehouseScreen() {
             </Label>
           </div>
           <p className="text-xs text-stone-500 max-w-[380px]">
-            Пополнение склада на старте каждого дня: покрытие {restaurant.marketing.autoPurchase?.coverDays ?? 2} дн.,
-            скоропорт — по сроку годности, оплата при заказе, доставка на следующее утро.
+            Пополнение склада на старте каждого дня: цель покрытия {coverTarget} дн. — из режима закупки
+            ({PROC_LABELS[policy].title.toLowerCase()}), скоропорт — по сроку годности, оплата при заказе,
+            доставка на следующее утро.
           </p>
         </div>
       </SectionCard>

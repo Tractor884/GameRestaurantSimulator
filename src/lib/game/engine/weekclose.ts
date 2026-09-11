@@ -38,6 +38,9 @@ import { computeBSCFromState, computeFinalScore } from './bsc';
 import { computeForecast } from './forecast';
 import { weeklyTurnover } from './staff';
 import { INSURANCE_PAYROLL_SHARE } from './welfare';
+import { REVIEWS_V2 } from '../config/reviews.config';
+import { PROCUREMENT } from '../config/procurement.config';
+import { SECRETARY_EFFECTS } from '../config/staffRoles.config';
 
 export function closeWeek(state: GameState, seed: number): WeekSimulationResult {
   const draft = state; // мутируем переданный клон
@@ -220,6 +223,46 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   // ===== ТЕКУЧКА (конец недели) =====
   const turnoverRng = deriveRng(hashSeed(seed, week), 'turnover');
   weeklyTurnover(restaurant, () => turnoverRng.next());
+
+  // ===== БАЛ-v2 §8 (механизм D): НЕОТВЕЧЕННЫЕ ОТЗЫВЫ → ЮР. РИСК =====
+  // +0,3 × min(U, 30) в неделю; естественная релаксация −0,3/день уже в updateRisks.
+  {
+    const u = restaurant.reputation.unansweredNeg ?? 0;
+    const legalDelta = REVIEWS_V2.legalPerUnanswered * Math.min(u, REVIEWS_V2.legalCapU);
+    if (legalDelta > 0) {
+      restaurant.risks.legal = clamp(restaurant.risks.legal + legalDelta, 0, 100);
+    }
+  }
+
+  // ===== БАЛ-v2 §9: АКТИВАЦИЯ ПЕРЕКЛЮЧЕНИЯ РЕЖИМА ЗАКУПКИ (лаг 2 нед) =====
+  // Переговоры оплачены в setProcurementPolicy; здесь контракт вступает в силу.
+  {
+    const proc = restaurant.inventory.procurement;
+    if (proc?.pendingSwitch && week - proc.pendingSwitch.orderedAt >= PROCUREMENT.switchLagWeeks) {
+      proc.policy = proc.pendingSwitch.to;
+      proc.pendingSwitch = null;
+    }
+  }
+
+  // ===== СЕКРЕТАРЬ: КОМПЛАЕНС-ПОДДЕРЖКА (админ-роль) =====
+  // Бумаги сдаются вовремя: юр. риск каждую неделю снижается дополнительно
+  // (−0,9 × min(2, штат), кап −1,8/нед); штрафы проверок дешевле на 20% (endday).
+  // Эффект требует НАЗНАЧЕННЫХ смен (анти-абьюз: наём «в стол» не работает).
+  {
+    const pool = restaurant.staff.pools.secretary;
+    const scheduledShifts = (restaurant.staff.schedule.secretary ?? []).reduce(
+      (s, sh) => s + sh.morning + sh.evening,
+      0,
+    );
+    const secretaryCount = pool?.count ?? 0;
+    if (secretaryCount > 0 && scheduledShifts > 0) {
+      const bonus = Math.min(2, secretaryCount) * SECRETARY_EFFECTS.legalRelaxPerWeek;
+      restaurant.risks.legal = clamp(restaurant.risks.legal - bonus, 0, 100);
+    }
+  }
+
+  // ===== БАЛ-v2 §9: СБРОС НЕДЕЛЬНОГО СЧЁТЧИКА СБОЕВ ПОСТАВКИ =====
+  restaurant.inventory.supplyErrorsWeek = 0;
 
   // ===== ИСТОРИЯ =====
   const guests = dayResults.reduce((s, r) => s + r.kpi.guests, 0);

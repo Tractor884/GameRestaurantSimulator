@@ -16,6 +16,7 @@ import type {
   LoanState,
   GameEvent,
   Dish,
+  ProcurementPolicyId,
 } from '../types';
 import { DIFFICULTIES } from '../config/difficulty.config';
 import { LOCATIONS_MAP, LOCATIONS } from '../config/locations.config';
@@ -35,6 +36,8 @@ import { annuityPayment, LOANS } from '../config/loans.config';
 import { placePurchase, buildAutoOrder } from './inventory';
 import { addTransaction, clamp } from './core';
 import { EVENT_TEMPLATES_MAP } from '../config/risks.config';
+import { REVIEWS_V2 } from '../config/reviews.config';
+import { PROCUREMENT, PROC_LABELS } from '../config/procurement.config';
 
 export interface SetupOptions {
   seed: number;
@@ -79,21 +82,26 @@ export function defaultSchedule(): Record<RoleId, StaffShifts[]> {
     hostess: mk(() => ({ morning: 1, evening: 1 })),
     cleaner: mk(() => ({ morning: 1, evening: 1 })),
     dishwasher: mk(() => ({ morning: 1, evening: 1 })),
+    // Секретарь — админ-роль: по умолчанию НЕ в графике (и не нанят).
+    // Наймите в «Персонале» и назначьте смены в «Графике».
+    secretary: mk(() => ({ morning: 0, evening: 0 })),
   };
 }
 
-/** Дефолтный штат: ceil(смен в неделю / 5) по ролям. */
+/** Дефолтный штат: ceil(смен в неделю / 5) по ролям.
+ *  Роли без запланированных смен (секретарь) стартуют НЕ нанятыми. */
 export function defaultPools(): Record<RoleId, { count: number; fatigue: number; morale: number; newHires: number }> {
   const schedule = defaultSchedule();
   const pools = {} as Record<RoleId, { count: number; fatigue: number; morale: number; newHires: number }>;
   for (const roleId of ROLE_IDS) {
     const shifts = schedule[roleId].reduce((s, d) => s + d.morning + d.evening, 0);
+    const headcount = shifts > 0 ? Math.max(1, Math.ceil(shifts / 5)) : 0;
     pools[roleId] = {
-      count: Math.max(1, Math.ceil(shifts / 5)),
-      fatigue: 10,
+      count: headcount,
+      fatigue: headcount > 0 ? 10 : 0,
       morale: 70,
       // Все — новички: адаптация 7 дней (ТЗ §14.5).
-      newHires: Math.max(1, Math.ceil(shifts / 5)),
+      newHires: headcount,
     };
   }
   return pools;
@@ -152,7 +160,7 @@ export function createGame(opts: SetupOptions): GameState {
     depositPaid: deposit,
     utilitiesMonthly,
     menu: { dishes: [...menuIds], prices, stopList: [], customDishes: [] },
-    inventory: { batches: [], pendingOrders: [] },
+    inventory: { batches: [], pendingOrders: [], procurement: { policy: 'standard', pendingSwitch: null }, supplyErrorsWeek: 0 },
     staff: { pools: defaultPools(), schedule: defaultSchedule() },
     finance: {
       cash: 0,
@@ -167,6 +175,7 @@ export function createGame(opts: SetupOptions): GameState {
       priorReviews: 45,
       reviewCounter: 0,
       windowReviews: [],
+      unansweredNeg: 0,
     },
     customerMemory: { cohorts: [] },
     marketing: { campaigns: [], cleaningBudget: 45_000, autoPurchase: { enabled: true, coverDays: 2 } },
@@ -533,5 +542,70 @@ export function setAutoPurchase(state: GameState, enabled: boolean, coverDays: n
     message: enabled
       ? `Автозаказ включён: пополнение склада каждое утро на ${coverDays} дн.`
       : 'Автозаказ выключен: следите за складом вручную',
+  };
+}
+
+/** БАЛ-v2 §9 (G-режимы): переключить режим закупки. Оплата 50 тыс ₽ сразу,
+ *  активация — через лаг 2 нед (переговоры/контракт). Ручные заказы и
+ *  позиции не меняются — политика влияет на цены/качество входа/сроки/
+ *  порчу/сбои поставки/цель автозаказа. */
+export function setProcurementPolicy(state: GameState, policy: ProcurementPolicyId): ActionResult {
+  const r = state.restaurant!;
+  if (!r.inventory.procurement) r.inventory.procurement = { policy: 'standard', pendingSwitch: null };
+  const proc = r.inventory.procurement;
+  if (proc.policy === policy && !proc.pendingSwitch) {
+    return { ok: false, message: 'Этот режим уже активен' };
+  }
+  if (proc.pendingSwitch) {
+    return {
+      ok: false,
+      message: `Переключение уже в работе (на «${PROC_LABELS[proc.pendingSwitch.to].title}» с недели ${proc.pendingSwitch.orderedAt + PROCUREMENT.switchLagWeeks})`,
+    };
+  }
+  const cost = PROCUREMENT.switchCost;
+  if (r.finance.cash < cost) return { ok: false, message: 'Недостаточно денег' };
+  addTransaction(
+    r,
+    { week: state.week, day: state.day, hour: 20 },
+    'other',
+    cost,
+    'out',
+    `Переключение режима закупки на «${PROC_LABELS[policy].title}»`,
+  );
+  proc.pendingSwitch = { to: policy, orderedAt: state.week };
+  return {
+    ok: true,
+    message: `Переговоры с поставщиками начаты: режим «${PROC_LABELS[policy].title}» вступит в силу через ${PROCUREMENT.switchLagWeeks} нед`,
+  };
+}
+
+/** БАЛ-v2 §8 (механизм D): «Ответить на отзывы» — рабочий день управляющего
+ *  с ответами на все неотвеченные ≤3,5★. Стоимость 15 тыс ₽; U → 0;
+ *  приор рейтинга +0,013 × min(U, 5) (кап +0,05) — публичная работа над
+ *  ошибками заметна новым гостям; юр. риск −8 («проработали жалобы»). */
+export function replyToReviews(state: GameState): ActionResult {
+  const r = state.restaurant!;
+  const u = r.reputation.unansweredNeg ?? 0;
+  if (u <= 0) return { ok: false, message: 'Неотвеченных негативных отзывов нет' };
+  const cost = REVIEWS_V2.replyCost;
+  if (r.finance.cash < cost) return { ok: false, message: 'Недостаточно денег' };
+  addTransaction(
+    r,
+    { week: state.week, day: state.day, hour: 20 },
+    'other',
+    cost,
+    'out',
+    'Ответы на отзывы: рабочее время управляющего',
+  );
+  r.reputation.unansweredNeg = 0;
+  const priorGain = Math.min(
+    REVIEWS_V2.replyRatingMax,
+    REVIEWS_V2.replyRatingPerU * Math.min(u, REVIEWS_V2.replyRatingCapU),
+  );
+  r.reputation.priorRating = Math.min(5, r.reputation.priorRating + priorGain);
+  r.risks.legal = clamp(r.risks.legal - 8, 0, 100); // «проработали жалобы»
+  return {
+    ok: true,
+    message: `Отвечено на ${Math.round(u)} отзывов: конверсия восстановлена, приор рейтинга +${priorGain.toFixed(2)}`,
   };
 }
