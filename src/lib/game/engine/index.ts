@@ -16,6 +16,7 @@ export {
   importCustomDishes,
   purchaseIngredients,
   hireStaff,
+  staffHiringCost,
   fireStaff,
   setScheduleShifts,
   startCampaign,
@@ -23,6 +24,7 @@ export {
   setCleaningBudget,
   buyEquipment,
   repairEquipment,
+  serviceEquipment,
   deepCleaning,
   buyAlcoholLicense,
   repayLoan,
@@ -55,6 +57,28 @@ export {
 export { PROCUREMENT, PROC_LABELS, activeProcurement, procAutoCoverDays } from '../config/procurement.config';
 export { REVIEWS_V2, reviewNeedsReply, unansweredConvFactor } from '../config/reviews.config';
 export type { ProcurementPolicyId } from '../types';
+export { LANDLORD, rentQuarterlyIndex } from '../config/landlord.config';
+export { DIVIDENDS, dividendProposal, dividendTrustDelta } from '../config/dividends.config';
+export { DILEMMAS, DILEMMA_LABELS } from '../config/dilemmas.config';
+export {
+  EQUIPMENT_SERVICE,
+  serviceStatus,
+  wearMult as serviceWearMult,
+  breakMult as serviceBreakMult,
+  type ServiceStatus,
+} from '../config/equipmentService.config';
+export { currentRentMonthly, rentIndexationInfo } from './landlord';
+export {
+  computeFinalGrade,
+  RANK_PRESENTATION,
+  STARS_FINAL,
+  OWNER_REPLACED_FINAL,
+  RELOCATION_FINAL,
+  BANKRUPT_REASONS,
+  axisHints,
+  GRADE_AXIS_WEIGHTS,
+} from './finalGrade';
+export type { FinalGrade, FinalRankId, RankPresentation, SpecialPresentation } from './finalGrade';
 export { computeForecast } from './forecast';
 export { computeBSCFromState } from './bsc';
 export { checkInvariants } from './invariants';

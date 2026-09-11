@@ -34,10 +34,18 @@ import { DISHES_MAP, STARTER_MENU_IDS } from '../content/dishes';
 import { dishOf } from '../content/resolve';
 import { annuityPayment, LOANS } from '../config/loans.config';
 import { placePurchase, buildAutoOrder } from './inventory';
-import { addTransaction, clamp } from './core';
+import { addTransaction, clamp, dayIndex } from './core';
 import { EVENT_TEMPLATES_MAP } from '../config/risks.config';
 import { REVIEWS_V2 } from '../config/reviews.config';
 import { PROCUREMENT, PROC_LABELS } from '../config/procurement.config';
+import { DIVIDENDS } from '../config/dividends.config';
+import { LANDLORD } from '../config/landlord.config';
+import { EQUIPMENT_SERVICE } from '../config/equipmentService.config';
+import { deriveRng, hashSeed } from '../rng';
+import { initLandlordState, applyLandlordResolution } from './landlord';
+import { applyDividendDecision, applyOwnerForcePay, applyOwnerRefuse } from './dividends';
+import { applyDilemmaResolution } from './dilemmas';
+import { hireCostMult } from './permanent';
 
 export interface SetupOptions {
   seed: number;
@@ -159,6 +167,20 @@ export function createGame(opts: SetupOptions): GameState {
     rentMonthly,
     depositPaid: deposit,
     utilitiesMonthly,
+    // БАЛ-v2 §6 (v8): цепочка арендодателя — первый разговор на нед 8–23,
+    // детерминировано от seed (отдельный rng-поток, существующие броски не сдвинуты).
+    landlord: initLandlordState(
+      rentMonthly,
+      LANDLORD.firstTalkMin +
+        Math.floor(deriveRng(hashSeed(opts.seed, 0), 'landlord').next() * LANDLORD.firstTalkSpread),
+    ),
+    // БАЛ-v2 §13 (v8): доверие владельца и дивиденды.
+    // БАЛ-v2 §15 (v8): перманентные эффекты дилемм (пусто на старте).
+    permanentEffects: {},
+    lastDilemmaWeek: 0,
+    fatigueHighWeeks: 0,
+    ratingHighWeeks: 0,
+    leverageHighWeeks: 0,
     menu: { dishes: [...menuIds], prices, stopList: [], customDishes: [] },
     inventory: { batches: [], pendingOrders: [], procurement: { policy: 'standard', pendingSwitch: null }, supplyErrorsWeek: 0 },
     staff: { pools: defaultPools(), schedule: defaultSchedule() },
@@ -168,6 +190,8 @@ export function createGame(opts: SetupOptions): GameState {
       loans: loanAmount > 0 ? [loan] : [],
       txCounter: 0,
       accrued: { payrollGross: 0, taxProfit: 0, rentPaidWeeks: 0 },
+      ownerTrust: DIVIDENDS.trustStart,
+      dividends: { history: [], lastProposal: null, quarterStartCash: 0 },
     },
     reputation: {
       rating: 3.9,
@@ -184,9 +208,9 @@ export function createGame(opts: SetupOptions): GameState {
       : { alcohol: null },
     risks: { sanitary: 15, technical: 20, staff: 18, legal: 10, reputation: 10, financial: 15 },
     equipment: {
-      kitchen: { level: opts.equipment.kitchen, wear: 5, value: EQUIPMENT_COSTS[opts.equipment.kitchen].kitchen },
-      coffee: { level: opts.equipment.coffee, wear: 5, value: EQUIPMENT_COSTS[opts.equipment.coffee].coffee },
-      hall: { level: opts.equipment.hall, wear: 5, value: EQUIPMENT_COSTS[opts.equipment.hall].hall },
+      kitchen: { level: opts.equipment.kitchen, wear: 5, value: EQUIPMENT_COSTS[opts.equipment.kitchen].kitchen, lastServicedAt: 0 },
+      coffee: { level: opts.equipment.coffee, wear: 5, value: EQUIPMENT_COSTS[opts.equipment.coffee].coffee, lastServicedAt: 0 },
+      hall: { level: opts.equipment.hall, wear: 5, value: EQUIPMENT_COSTS[opts.equipment.hall].hall, lastServicedAt: 0 },
     },
     cleanliness: 70,
     comfort: RENOVATION_LEVELS[opts.renovation].comfortBase,
@@ -234,6 +258,9 @@ export function createGame(opts: SetupOptions): GameState {
   if (licenseCost > 0) {
     addTransaction(restaurant, date, 'license', licenseCost, 'out', 'Лицензия на алкоголь (год)');
   }
+
+  // БАЛ-v2 §13 (v8): касса на начало 1-го квартала — точка отсчёта FCF.
+  restaurant.finance.dividends!.quarterStartCash = restaurant.finance.cash;
 
   // ===== СТАРТОВЫЕ ЗАКУПКИ =====
   // Автозаказ на 4 дня работы с доставкой «до открытия» (стартовый сток).
@@ -365,12 +392,37 @@ export function purchaseIngredients(
   return { ok: true, message: `Закупка на ${Math.round(total).toLocaleString('ru-RU')} ₽` };
 }
 
+/** Стоимость найма одного сотрудника роли: базово 0 (свои каналы), в окне
+ *  кадрового кризиса (дилемма «держаться», §15) — хедхантинг ×1,5. */
+export function staffHiringCost(state: GameState, roleId: RoleId, count: number): number {
+  const r = state.restaurant!;
+  const per = 30_000 * hireCostMult(r, state.week);
+  return Math.round(per * count);
+}
+
 export function hireStaff(state: GameState, roleId: RoleId, count: number): ActionResult {
   const r = state.restaurant!;
   const pool = r.staff.pools[roleId];
+  // ДИЛЕММА «Кризис» (держаться, §15): в окне кризиса персонал ищут через
+  // агентства — подбор платный (30 тыс ₽ × hireMult за человека).
+  const cost = staffHiringCost(state, roleId, count);
+  if (cost > 0) {
+    if (r.finance.cash < cost) return { ok: false, message: `Недостаточно денег на подбор (${cost.toLocaleString('ru-RU')} ₽)` };
+    addTransaction(
+      r,
+      dateNow(state),
+      'other',
+      cost,
+      'out',
+      `Подбор персонала: ${STAFF_ROLES[roleId].name} ×${count} (агентство, окно кризиса)`,
+    );
+  }
   pool.count += count;
   pool.newHires += count;
-  return { ok: true, message: `Нанято: ${STAFF_ROLES[roleId].name} ×${count} (адаптация 7 дней)` };
+  return {
+    ok: true,
+    message: `Нанято: ${STAFF_ROLES[roleId].name} ×${count} (адаптация 7 дней)${cost > 0 ? ` — подбор ${cost.toLocaleString('ru-RU')} ₽` : ''}`,
+  };
 }
 
 export function fireStaff(state: GameState, roleId: RoleId, count: number): ActionResult {
@@ -430,6 +482,8 @@ export function buyEquipment(state: GameState, zone: 'kitchen' | 'coffee' | 'hal
   z.level = level;
   z.wear = 5;
   z.value = cost;
+  // Новое оборудование = обслуженное: окно профилактики стартует с монтажа.
+  z.lastServicedAt = dayIndex(dateNow(state));
   return { ok: true, message: 'Оборудование установлено' };
 }
 
@@ -441,7 +495,36 @@ export function repairEquipment(state: GameState, zone: 'kitchen' | 'coffee' | '
   if (r.finance.cash < cost) return { ok: false, message: 'Недостаточно денег' };
   addTransaction(r, dateNow(state), 'repair', cost, 'out', `Ремонт оборудования (${zone === 'kitchen' ? 'кухня' : zone === 'coffee' ? 'кофе' : 'зал'})`);
   z.wear = Math.max(0, z.wear - 40);
+  // Ремонт включает сервисное обслуживание: окно профилактики обновляется.
+  z.lastServicedAt = dayIndex(dateNow(state));
   return { ok: true, message: 'Оборудование отремонтировано' };
+}
+
+/** ПРОФИЛАКТИКА ОБОРУДОВАНИЯ (v8, запрос пользователя): плановое ТО зоны.
+ *  ДЕШЕВЛЕ ремонта (8% стоимости против стоимости×износ×40%), работает
+ *  на перед: износ −12 + окно защиты 28 дн (износ ×0,5, поломки ×0,55).
+ *  Долгое отсутствие ТО (56+ дн) — обратный эффект: износ ×1,3, поломки ×1,6. */
+export function serviceEquipment(state: GameState, zone: 'kitchen' | 'coffee' | 'hall'): ActionResult {
+  const r = state.restaurant!;
+  const z = r.equipment[zone];
+  const cost = Math.max(20_000, Math.round(z.value * EQUIPMENT_SERVICE.costShare));
+  if (r.finance.cash < cost) return { ok: false, message: 'Недостаточно денег на ТО' };
+  const zoneName = zone === 'kitchen' ? 'кухня' : zone === 'coffee' ? 'кофе' : 'зал';
+  addTransaction(
+    r,
+    dateNow(state),
+    'maintenance',
+    cost,
+    'out',
+    `Профилактическое обслуживание: ${zoneName} (инженер, регламент, расходники)`,
+  );
+  z.wear = Math.max(0, z.wear - EQUIPMENT_SERVICE.wearReduction);
+  z.lastServicedAt = dayIndex(dateNow(state));
+  r.risks.technical = clamp(r.risks.technical - EQUIPMENT_SERVICE.techRiskDrop, 0, 100);
+  return {
+    ok: true,
+    message: `ТО проведено (${zoneName}): износ −${EQUIPMENT_SERVICE.wearReduction}, защита от поломок на ${EQUIPMENT_SERVICE.protectionDays} дн`,
+  };
 }
 
 export function deepCleaning(state: GameState): ActionResult {
@@ -484,21 +567,99 @@ export function repayLoan(state: GameState, loanIndex: number, amount: number): 
   return { ok: true, message: 'Досрочное погашение принято' };
 }
 
-/** Решение критического события (ТЗ §20.4): выбор варианта реакции. */
+/** Решение критического события (ТЗ §20.4): выбор варианта реакции.
+ *  ДИНАМИЧЕСКИЕ РЕЗОЛЮЦИИ (v8): системные события (дилеммы §15, дивиденды
+ *  §13, арендодатель §6, уход шефа §15) несут собственные варианты —
+ *  они приоритетнее шаблона; спец-теги (dilemma/dividend/landlord/…)
+ *  включают собственную логику применения (модули landlord/dividends/dilemmas). */
 export function resolveEvent(state: GameState, eventId: string, resolutionIndex: number): ActionResult {
   const event = state.activeEvents.find((e) => e.id === eventId);
   if (!event) return { ok: false, message: 'Событие не найдено' };
+  const dynamicRes = event.resolutions;
   const template = EVENT_TEMPLATES_MAP[event.templateId];
-  if (!template?.resolutions) return { ok: false, message: 'Нет вариантов решения' };
-  const res = template.resolutions[resolutionIndex];
+  if (!dynamicRes && !template?.resolutions) return { ok: false, message: 'Нет вариантов решения' };
+  const res = (dynamicRes ?? template!.resolutions!)[resolutionIndex];
   if (!res) return { ok: false, message: 'Неверный вариант' };
   const r = state.restaurant!;
 
+  // ===== СПЕЦ-ВЕТКИ СИСТЕМНЫХ СОБЫТИЙ (полная логика до generic-обработки) =====
+
+  // Дивиденды (§13): платёж идёт типом 'dividend' и может быть ограничен кассой.
+  const dividendAction = (res as { dividend?: { fraction: number } }).dividend;
+  if (dividendAction) {
+    if (res.cost > 0 && r.finance.cash < Math.min(res.cost, 100_000)) {
+      return { ok: false, message: 'Недостаточно денег на этот вариант' };
+    }
+    const out = applyDividendDecision(state, event, dividendAction.fraction);
+    if (!out.ok) return out;
+    event.resolved = true;
+    state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
+    return { ok: true, message: out.message };
+  }
+  // «Разговор с владельцем»: принудительная выплата доли кассы.
+  const forcePayAction = (res as { ownerForcePay?: { cashShare: number } }).ownerForcePay;
+  if (forcePayAction) {
+    const out = applyOwnerForcePay(state, event, forcePayAction.cashShare);
+    if (!out.ok) return out;
+    event.resolved = true;
+    state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
+    return { ok: true, message: out.message };
+  }
+  // «Разговор с владельцем»: отказ.
+  const ownerRefuseAction = (res as { ownerRefuse?: { trust: number; risk: number } }).ownerRefuse;
+  if (ownerRefuseAction) {
+    const out = applyOwnerRefuse(state, event, ownerRefuseAction.trust, ownerRefuseAction.risk);
+    if (!out.ok) return out;
+    event.resolved = true;
+    state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
+    return { ok: true, message: out.message };
+  }
+  // Арендодатель (§6): шаги индексации/отказ/ультиматум/переезд.
+  const landlordAction = (res as { landlord?: 'accept' | 'refuse' | 'accept_ultimatum' | 'relocate' }).landlord;
+  if (landlordAction) {
+    const note = applyLandlordResolution(state, landlordAction, event.date.week);
+    event.resolved = true;
+    event.resolutionNote = note;
+    state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
+    return { ok: true, message: note };
+  }
+  // Дилемма (§15): перманентные эффекты применяет dilemmas.ts.
+  // Платные ветки (взятка) проводят деньги честным типом 'other'.
+  const dilemmaTag = (res as { dilemma?: string }).dilemma;
+  if (dilemmaTag) {
+    if (res.cost > 0) {
+      if (r.finance.cash < res.cost) return { ok: false, message: 'Недостаточно денег на этот вариант' };
+      addTransaction(r, event.date, 'other', res.cost, 'out', `Решение дилеммы: ${event.title}`);
+    }
+    const note = applyDilemmaResolution(state, event, dilemmaTag);
+    event.resolved = true;
+    event.resolutionNote = note;
+    state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
+    return { ok: true, message: note };
+  }
+  // Платный найм замены (уход шефа §15): подбор + найм роли.
+  const hireAction = (res as { hire?: { roleId: RoleId } }).hire;
+  if (hireAction) {
+    if (res.cost > 0) {
+      if (r.finance.cash < res.cost) return { ok: false, message: 'Недостаточно денег на подбор' };
+      addTransaction(r, event.date, 'other', res.cost, 'out', `Хедхантинг: ${STAFF_ROLES[hireAction.roleId].name}`);
+    }
+    const pool = r.staff.pools[hireAction.roleId];
+    pool.count += 1;
+    pool.newHires += 1;
+    const note = res.note;
+    event.resolved = true;
+    event.resolutionNote = note;
+    state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
+    return { ok: true, message: `Новый ${STAFF_ROLES[hireAction.roleId].name} выходит со следующего дня` };
+  }
+
+  // ===== GENERIC-ВЕТКА (шаблонные события пула) =====
   if (res.cost > 0) {
     if (r.finance.cash < res.cost) return { ok: false, message: 'Недостаточно денег на этот вариант' };
     addTransaction(r, event.date, 'other', res.cost, 'out', `Решение события: ${event.title}`);
   }
-  const delta = res.effectDelta;
+  const delta = res.effectDelta ?? {};
   if (delta.cash && delta.cash !== 0) {
     if (delta.cash > 0) addTransaction(r, event.date, 'other', delta.cash, 'in', event.title);
     else addTransaction(r, event.date, 'fine', -delta.cash, 'out', event.title);

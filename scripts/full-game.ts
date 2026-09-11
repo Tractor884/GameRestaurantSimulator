@@ -25,11 +25,13 @@ for (let i = 0; i < 52 * 7 && state.phase !== 'gameover'; i++) {
   const res = simulateDay(state, { plannedActions: [] }, state.seed);
   state = res.state;
   for (const e of state.activeEvents.filter((x) => !x.resolved)) {
-    const tpl = EVENT_TEMPLATES_MAP[e.templateId];
-    if (!tpl?.resolutions) continue;
+    // v8: динамические резолюции системных событий (дилеммы/дивиденды/
+    // арендодатель/шеф) приоритетнее шаблона пула.
+    const options = e.resolutions ?? EVENT_TEMPLATES_MAP[e.templateId]?.resolutions;
+    if (!options) continue;
     let idx = 0;
-    for (let k = 0; k < tpl.resolutions.length; k++) {
-      if (state.restaurant!.finance.cash >= tpl.resolutions[k].cost) idx = k;
+    for (let k = 0; k < options.length; k++) {
+      if (state.restaurant!.finance.cash >= options[k].cost) idx = k;
     }
     if (!resolveEvent(state, e.id, idx).ok) resolveEvent(state, e.id, 0);
   }

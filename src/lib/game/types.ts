@@ -24,6 +24,7 @@ export type GamePhase = 'setup' | 'managing' | 'gameover';
 
 export type GameStatus =
   | 'bankrupt'
+  | 'owner_replaced' // финал «Управленца сменили» (БАЛ-v2 §13.2, v8)
   | 'survived_12'
   | 'stable'
   | 'sustainable'
@@ -126,6 +127,7 @@ export type TransactionType =
   | 'bonus' // премии штату (благосостояние)
   | 'training' // тренинги персонала
   | 'insurance' // медстраховка персонала
+  | 'dividend' // дивиденды владельцу (БАЛ-v2 §13, v8)
   | 'other';
 
 /* ============================= КОНТЕНТ ============================= */
@@ -275,6 +277,10 @@ export interface EquipmentZone {
   level: EquipmentLevel;
   wear: number; // износ 0..100
   value: number; // балансовая стоимость, ₽
+  /** Абс. день последнего обслуживания (профилактика/ремонт/установка):
+   *  защита от поломок ≤ protectionDays, «запущенность» после neglectDays
+   *  (миграция v8; undefined = нейтрально). */
+  lastServicedAt?: number;
 }
 
 export interface EquipmentState {
@@ -351,6 +357,53 @@ export interface Restaurant {
   atmosphere: number; // 0..100
   openHours: { start: number; end: number }; // 8..23
   weekendEnd: number; // пт/сб до 23 или 24
+  /** Цепочка арендодателя (БАЛ-v2 §6, v8): индексация, разговоры, ультиматум. */
+  landlord?: LandlordState;
+  /** Перманентные эффекты дилемм (БАЛ-v2 §15, v8): «до конца игры». */
+  permanentEffects?: PermanentEffects;
+  /** Окна триггеров дилемм (v8, обновляются на weekclose). */
+  lastDilemmaWeek?: number;
+  fatigueHighWeeks?: number;
+  ratingHighWeeks?: number;
+  leverageHighWeeks?: number;
+}
+
+/** Состояние отношений с арендодателем (БАЛ-v2 §6). */
+export interface LandlordState {
+  /** Отношения 0..100: ≥80 снижает квартальный индекс аренды. */
+  relation: number;
+  /** Число отказов подряд (2 → ультиматум). */
+  refusals: number;
+  /** Неделя следующего разговора (0 = диалог открыт, новых не назначаем). */
+  nextTalkWeek: number;
+  /** Базовая аренда договора, ₽/мес. */
+  rentBase: number;
+  /** Суммарный шаг индексации от договорённостей (доли). */
+  stepSum: number;
+}
+
+/** Перманентные эффекты дилемм (§15): применяются движком до конца игры. */
+export interface PermanentEffects {
+  /** «Шеф» (согласие): FC −1 п.п., средний чек −3%. */
+  chefMenuCut?: boolean;
+  /** «Шеф» (отказ): увольнения ×mult до untilWeek, затем шанс ухода шефа. */
+  chefQuitRisk?: { mult: number; untilWeek: number };
+  /** «Инспектор» (взятка): скандал p/год. */
+  bribeFlag?: boolean;
+  /** «Инспектор» (отказ): штрафы событий ×refuseFineMult навсегда. */
+  hardInspections?: boolean;
+  /** «Банк» (отказ): кредитный лимит урезан (доля). */
+  creditLimitShare?: number;
+  /** «Франшиза» (согласие): спрос ×mult навсегда. */
+  franchiseDemand?: number;
+  /** «Франшиза» (согласие): доля выручки сети навсегда. */
+  franchiseOwnerShare?: number;
+  /** «Франшиза» (отказ): престиж +N к BSC «Клиенты». */
+  prestigeBonus?: number;
+  /** «Кризис» (поднять): оклады ×mult навсегда. */
+  wageRaise?: number;
+  /** «Кризис» (держаться): усталость ×qFatigueMult, найм дороже — окно. */
+  staffCrisis?: { qFatigueMult: number; hireMult: number; untilWeek: number };
 }
 
 /* ============================= ФИНАНСЫ ============================= */
@@ -376,6 +429,29 @@ export interface FinanceState {
     taxProfit: number; // накопленная налогооблагаемая прибыль квартала
     rentPaidWeeks: number; // для контроля месячных платежей
   };
+  /** Доверие владельца 0..100 (БАЛ-v2 §13.2, v8): ≥70 — бонусы вероятнее,
+   *  <35 — «Разговор с владельцем», <15 — финал «Управленца сменили». */
+  ownerTrust?: number;
+  /** Дивиденды: история и активное предложение квартала (v8). */
+  dividends?: DividendsState;
+}
+
+/** Состояние дивидендов (БАЛ-v2 §13). */
+export interface DividendsState {
+  /** Последние выплаты (для графика доверия). */
+  history: { quarter: number; week: number; proposed: number; paid: number; trustDelta: number }[];
+  /** Активное предложение (живёт до решения игрока). */
+  lastProposal: {
+    quarter: number;
+    week: number;
+    fcf: number;
+    netProfit: number;
+    revenue: number;
+    proposed: number;
+  } | null;
+  /** Касса на начало квартала: FCF_кв = Δ кассы (все платежи уже честно
+   *  проходят через транзакции — тело кредита, оборудование, лицензии). */
+  quarterStartCash: number;
 }
 
 export interface PnlReport {
@@ -423,6 +499,8 @@ export interface CashFlowReport {
   equipmentPaid: number;
   loanDisbursements: number;
   ownerContributions: number;
+  /** Выплаченные дивиденды владельцу (БАЛ-v2 §13, v8). */
+  dividendsPaid: number;
   eventIncome: number;
   cashEnd: number;
 }
@@ -535,6 +613,30 @@ export interface GameEvent {
   effect: GameEventEffect;
   resolved: boolean;
   resolutionNote?: string;
+  /** Динамические резолюции системных событий (дилеммы §15, дивиденды §13,
+   *  арендодатель §6, уход шефа) — приоритетнее шаблона (v8). */
+  resolutions?: EventResolution[];
+}
+
+/** Вариант реакции игрока. Базовые поля совместимы с шаблонами risks.config;
+ *  спец-теги включают собственную логику применения в resolveEvent. */
+export interface EventResolution {
+  label: string;
+  cost: number; // ₽ (снимается generic-веткой до спец-логики)
+  note: string;
+  effectDelta?: GameEventEffect;
+  /** Тег ветки дилеммы (dilemmas.ts применяет эффекты сам). */
+  dilemma?: string;
+  /** Дивиденды: доля выплаты от предложения (§13). */
+  dividend?: { fraction: number };
+  /** «Разговор с владельцем»: принудительная выплата доли кассы. */
+  ownerForcePay?: { cashShare: number };
+  /** «Разговор с владельцем»: отказ. */
+  ownerRefuse?: { trust: number; risk: number };
+  /** Цепочка арендодателя (§6). */
+  landlord?: 'accept' | 'refuse' | 'accept_ultimatum' | 'relocate';
+  /** Платный найм замены (уход шефа). */
+  hire?: { roleId: RoleId };
 }
 
 /* ============================= BSC / ПРОГНОЗ ============================= */
@@ -718,6 +820,8 @@ export interface HistoryState {
   cumulativeNetProfit: number;
   positiveOpWeeks: number; // подряд положительная операционная прибыль
   lowRatingWeeks: number; // подряд рейтинг < 2.0
+  /** Переезды по ультиматуму арендодателя (спец-финал §20, v8). */
+  relocations?: number;
 }
 
 export interface GameState {

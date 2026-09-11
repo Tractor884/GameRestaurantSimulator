@@ -21,6 +21,7 @@ import { EQUIPMENT_LEVELS } from '../config/premises.config';
 import type { Rng } from '../rng';
 import { clamp } from './core';
 import { consumeForDish, maxPortions } from './inventory';
+import { chefMenuCutFactors } from './permanent';
 import { effectiveStaff, stationCapacity, waiterLoad, organizationFactor, averageFatigue } from './staff';
 import { estimatedCheck } from './demand';
 
@@ -243,12 +244,15 @@ function generateOrders(
 
   // Исполнение: FIFO-списание и выручка только по факту (ТЗ §14.9).
   // БАЛ-v2 §9: режим закупки (эконом ↔ премиум) — качество входа в поданных блюдах.
+  // ДИЛЕММА «Шеф» (согласие, §15): стандартизация — позиции в заказе и расход
+  // входов ×0,97 каждый (FC −1 п.п., средний чек −3%, навсегда).
   const policy: ProcurementPolicyId = activeProcurement(restaurant);
+  const cut = chefMenuCutFactors(restaurant);
   let qualitySum = 0;
   let countSum = 0;
   for (const p of picks) {
     const stFf = fulfillment[p.dish.station] ?? 1;
-    const served = p.count * stFf * serviceFulfillment;
+    const served = p.count * stFf * serviceFulfillment * cut.qty;
     const lost = p.count - served;
     if (lost > 0.01) result.lostItems += lost;
     if (served <= 0.02) continue;
@@ -258,7 +262,7 @@ function generateOrders(
     if (portionsActual <= 0) continue;
     const price = restaurant.menu.prices[p.dish.id] ?? p.dish.recommendedPrice;
     result.revenue += price * portionsActual;
-    result.cogs += consumeForDish(restaurant.inventory, p.dish, portionsActual);
+    result.cogs += consumeForDish(restaurant.inventory, p.dish, portionsActual * cut.portion);
     result.itemsSold += portionsActual;
     result.dishesSold[p.dish.id] = (result.dishesSold[p.dish.id] ?? 0) + portionsActual;
     // БАЛ-v2 §9: качество входа (режим закупки эконом↔премиум) сдвигает качество

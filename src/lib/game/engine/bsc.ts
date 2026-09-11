@@ -7,6 +7,7 @@ import type { BSCReport, FinalScore, GameState, PnlReport, WeekStat } from '../t
 import { BSC_CONFIG, FINAL_SCORE_WEIGHTS } from '../config/bsc.config';
 import { STAFF_ROLES } from '../config/staffRoles.config';
 import { averageFatigue, dayCoverage } from './staff';
+import { clientPrestigeBonus } from './permanent';
 
 function interpolate(points: [number, number][], x: number): number {
   if (x <= points[0][0]) return points[0][1];
@@ -191,6 +192,14 @@ export function computeBSCFromState(state: GameState, pnl: PnlReport): BSCReport
   }
   // Пересчёт перспектив с обновлёнными оценками.
   recomputePerspectives(report);
+  // ДИЛЕММА «Франшиза» (отказ, §15): престиж шефа +N к перспективе «Клиенты»
+  // («независимость дороже») — надбавка поверх пересчёта, кап 100.
+  const prestige = clientPrestigeBonus(r);
+  if (prestige > 0 && report.client < 100) {
+    report.client = Math.min(100, Math.round((report.client + prestige) * 10) / 10);
+    report.total =
+      Math.round((report.finance * 0.3 + report.client * 0.25 + report.process * 0.25 + report.staff * 0.2) * 10) / 10;
+  }
   return report;
 }
 

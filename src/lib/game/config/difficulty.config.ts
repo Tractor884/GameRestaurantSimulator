@@ -193,6 +193,7 @@ export const LOSE_CONDITIONS = {
 export const STATUS_LABELS: Record<GameStatus, string> = {
   open: 'Работает',
   bankrupt: 'Банкротство',
+  owner_replaced: 'Управленца сменили',
   survived_12: 'Выжил (12 недель)',
   stable: 'Стабильный ресторан',
   sustainable: 'Устойчивый ресторан',

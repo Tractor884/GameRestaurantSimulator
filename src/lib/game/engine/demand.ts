@@ -32,6 +32,7 @@ import { DIFFICULTIES } from '../config/difficulty.config';
 import { dishOf } from '../content/resolve';
 import type { Rng } from '../rng';
 import { workingHours } from './core';
+import { permanentDemandMult } from './permanent';
 
 export interface DemandFactors {
   reputation: number;
@@ -194,8 +195,11 @@ export function hourlyDemand(
     const pricePerception = Math.max(0.3, Math.min(1.5, 1 - seg.priceSensitivity * diff.demandElasticity * gap));
     const pq = pricePerception * quality;
     const mf = marketingFactor(restaurant, segId, date.week);
+    // ДИЛЕММА «Франшиза» (подписать, §15): спрос ×1,04 навсегда — бренд сети
+    // приводит своих гостей (эффект не зависит от кампаний).
+    const franchise = permanentDemandMult(restaurant);
     const rand = rng.float(RANDOM_FACTOR_RANGE[0], RANDOM_FACTOR_RANGE[1]);
-    newDemand[segId] = Math.max(0, base * share * pq * mf * rand);
+    newDemand[segId] = Math.max(0, base * share * pq * mf * franchise * rand);
   }
 
   const returning = emptyReturning();

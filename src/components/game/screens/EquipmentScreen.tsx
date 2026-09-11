@@ -10,10 +10,23 @@ import {
   EQUIPMENT_LEVELS,
   EQUIPMENT_COSTS,
 } from '@/lib/game/config/premises.config';
+import {
+  EQUIPMENT_SERVICE,
+  serviceStatus,
+  type ServiceStatus,
+} from '@/lib/game/config/equipmentService.config';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { Wrench, ChefHat, Coffee, Utensils, TriangleAlert } from 'lucide-react';
+import {
+  Wrench,
+  ChefHat,
+  Coffee,
+  Utensils,
+  TriangleAlert,
+  ShieldCheck,
+  CalendarClock,
+} from 'lucide-react';
 import type { EquipmentLevel } from '@/lib/game/types';
 import { CharacterPanel } from '../visual/CharacterPanel';
 
@@ -113,12 +126,19 @@ function ZoneCard({ zone }: { zone: (typeof ZONES)[number] }) {
   const restaurant = state.restaurant!;
   const equipment = useGame((s) => s.equipment);
   const equipmentRepair = useGame((s) => s.equipmentRepair);
+  const equipmentService = useGame((s) => s.equipmentService);
   const disabled = state.phase === 'gameover';
 
   const z = restaurant.equipment[zone.id];
   const cfg = EQUIPMENT_LEVELS[z.level];
   const repairCost = Math.round(z.value * (z.wear / 100) * 0.4);
   const atRisk = z.wear >= cfg.breakRiskThreshold;
+
+  // Профилактика (v8): статус обслуживания зоны на сегодня.
+  const absDay = (state.week - 1) * 7 + state.day;
+  const st = serviceStatus(z.lastServicedAt, absDay);
+  const daysSince = z.lastServicedAt != null ? absDay - z.lastServicedAt : null;
+  const serviceCost = Math.max(20_000, Math.round(z.value * EQUIPMENT_SERVICE.costShare));
 
   return (
     <SectionCard title={zone.label} icon={zone.icon}>
@@ -137,6 +157,9 @@ function ZoneCard({ zone }: { zone: (typeof ZONES)[number] }) {
         </div>
 
         <WearBar wear={z.wear} threshold={cfg.breakRiskThreshold} />
+
+        {/* Статус профилактики (v8) */}
+        <ServiceStatusChip status={st} daysSince={daysSince} />
 
         <div className="grid grid-cols-2 gap-2 text-sm">
           <div className="rounded-lg bg-stone-50 p-2.5">
@@ -165,6 +188,25 @@ function ZoneCard({ zone }: { zone: (typeof ZONES)[number] }) {
         )}
 
         <div className="space-y-2">
+          {/* ПРОФИЛАКТИКА (v8): дешевле ремонта, работает на перед. */}
+          <Button
+            variant="outline"
+            className={cn(
+              'h-11 w-full',
+              st === 'protected'
+                ? 'border-emerald-300 text-emerald-800 hover:bg-emerald-50'
+                : st === 'neglected'
+                  ? 'border-red-300 text-red-800 hover:bg-red-50 font-semibold'
+                  : 'border-teal-300 text-teal-800 hover:bg-teal-50',
+            )}
+            onClick={() => equipmentService(zone.id)}
+            disabled={disabled}
+            title={`Плановое ТО: износ −${EQUIPMENT_SERVICE.wearReduction}, защита ${EQUIPMENT_SERVICE.protectionDays} дн (износ ×0,5, поломки ×0,55). Дешевле ремонта: ${money(serviceCost)} против ${money(repairCost)}.`}
+          >
+            <ShieldCheck className="h-4 w-4 mr-1.5" aria-hidden />
+            Профилактика — {moneyShort(serviceCost)}
+          </Button>
+
           <Button
             variant="outline"
             className="h-11 w-full border-amber-300 text-amber-800 hover:bg-amber-50"
@@ -173,7 +215,7 @@ function ZoneCard({ zone }: { zone: (typeof ZONES)[number] }) {
             title={
               z.wear < 15
                 ? 'Износ ниже 15% — ремонт не нужен'
-                : `Стоимость ≈ ${money(repairCost)} (стоимость × износ × 0.4)`
+                : `Стоимость ≈ ${money(repairCost)} (стоимость × износ × 0.4). После ремонта — окно профилактики.`
             }
           >
             <Wrench className="h-4 w-4 mr-1.5" aria-hidden />
@@ -243,6 +285,51 @@ function WearBar({ wear, threshold }: { wear: number; threshold: number }) {
         <div className={cn('h-full rounded-full transition-all', color)} style={{ width: `${Math.min(100, wear)}%` }} />
       </div>
       <p className="text-[10px] text-stone-400 mt-1">порог поломок: {threshold}%</p>
+    </div>
+  );
+}
+
+/** Чип статуса профилактики зоны (v8): защита/норма/запущенность. */
+function ServiceStatusChip({ status, daysSince }: { status: ServiceStatus; daysSince: number | null }) {
+  if (status === 'protected') {
+    const left = daysSince != null ? EQUIPMENT_SERVICE.protectionDays - daysSince : 0;
+    return (
+      <div
+        className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-xs text-emerald-800"
+        role="status"
+      >
+        <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden />
+        <p>
+          <b>Защита после ТО:</b> ещё {Math.max(0, left)} дн — износ ×0,5, вероятность поломок ×0,55.
+        </p>
+      </div>
+    );
+  }
+  if (status === 'neglected') {
+    const over = daysSince != null ? daysSince - EQUIPMENT_SERVICE.neglectDays : 0;
+    return (
+      <div
+        className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs text-red-800"
+        role="alert"
+      >
+        <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5 text-red-600" aria-hidden />
+        <p>
+          <b>Без обслуживания {daysSince ?? '—'} дн</b> (+{over} сверх нормы): износ растёт ×1,3,
+          вероятность поломок ×1,6. Плановое ТО дешевле ремонта.
+        </p>
+      </div>
+    );
+  }
+  const daysLeft = daysSince != null ? EQUIPMENT_SERVICE.neglectDays - daysSince : null;
+  return (
+    <div
+      className="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 p-2.5 text-xs text-stone-600"
+      role="status"
+    >
+      <CalendarClock className="h-4 w-4 shrink-0 text-stone-400" aria-hidden />
+      <p>
+        Оборудование в норме{daysLeft != null && daysLeft > 0 ? ` — до «запущенности» ${daysLeft} дн (ТО освежит окно защиты)` : ''}.
+      </p>
     </div>
   );
 }

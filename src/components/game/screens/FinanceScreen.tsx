@@ -25,8 +25,11 @@ import {
   LineChart,
   Waves,
   ListOrdered,
+  Handshake,
+  Building2,
 } from 'lucide-react';
 import type { FinancialTransaction, TransactionType } from '@/lib/game/types';
+import { rentIndexationInfo } from '@/lib/game/engine';
 
 const TX_LABELS: Record<TransactionType, string> = {
   sale: 'Продажи',
@@ -51,6 +54,7 @@ const TX_LABELS: Record<TransactionType, string> = {
   bonus: 'Премии штату',
   training: 'Тренинги персонала',
   insurance: 'Медстраховка',
+  dividend: 'Дивиденды владельцу',
   other: 'Прочее',
 };
 
@@ -219,6 +223,9 @@ export function FinanceScreen() {
                 <FlowRow label="Оборудование" value={-cash.equipmentPaid} direction="out" big={cash.equipmentPaid >= 500_000} />
                 <FlowRow label="Кредиты получены" value={cash.loanDisbursements} direction="in" big={cash.loanDisbursements >= 500_000} />
                 <FlowRow label="Взносы владельца" value={cash.ownerContributions} direction="in" />
+                {cash.dividendsPaid > 0 && (
+                  <FlowRow label="Дивиденды владельцу" value={-cash.dividendsPaid} direction="out" big={cash.dividendsPaid >= 500_000} />
+                )}
                 <FlowRow label="Доходы от событий" value={cash.eventIncome} direction="in" />
                 <EmphasizedRow
                   label="Деньги на конец недели"
@@ -253,6 +260,9 @@ export function FinanceScreen() {
         </TabsContent>
       </Tabs>
 
+      {/* ===== ВЛАДЕЛЕЦ И АРЕНДА (БАЛ-v2 §6/§13, v8) ===== */}
+      <OwnerLandlordSection />
+
       <div className="flex items-start gap-2 rounded-lg border border-stone-200 bg-white p-3 text-sm text-stone-600">
         <Info className="h-4 w-4 mt-0.5 shrink-0 text-amber-700" aria-hidden />
         <p>
@@ -265,6 +275,155 @@ export function FinanceScreen() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Секция «Владелец и аренда» (БАЛ-v2 §6/§13, v8): доверие владельца,
+ *  история дивидендов, отношения с арендодателем и прогноз индексации. */
+function OwnerLandlordSection() {
+  const state = useGame((s) => s.state)!;
+  const restaurant = state.restaurant!;
+  const trust = restaurant.finance.ownerTrust ?? 60;
+  const dividends = restaurant.finance.dividends;
+  const landlord = restaurant.landlord;
+  const rentInfo = rentIndexationInfo(restaurant, state.week);
+  const proposal = dividends?.lastProposal;
+  const lastDividend = dividends?.history[dividends.history.length - 1];
+
+  const trustTone =
+    trust >= 70 ? 'text-emerald-700' : trust >= 35 ? 'text-amber-700' : 'text-red-700';
+  const trustBar = trust >= 70 ? 'bg-emerald-500' : trust >= 35 ? 'bg-amber-500' : 'bg-red-500';
+  const relationTone =
+    (landlord?.relation ?? 60) >= 70
+      ? 'text-emerald-700'
+      : (landlord?.relation ?? 60) >= 40
+        ? 'text-amber-700'
+        : 'text-red-700';
+
+  return (
+    <SectionCard title="Владелец и аренда" icon={Handshake}>
+      <div className="grid md:grid-cols-2 gap-6">
+        {/* Доверие владельца + дивиденды */}
+        <div>
+          <div className="flex items-baseline justify-between mb-1">
+            <span className="text-sm font-medium text-stone-700">Доверие владельца</span>
+            <span className={cn('text-sm font-bold tabular-nums', trustTone)}>{Math.round(trust)}/100</span>
+          </div>
+          <div
+            className="h-2 w-full rounded-full bg-stone-100 overflow-hidden"
+            role="progressbar"
+            aria-label="Доверие владельца"
+            aria-valuenow={Math.round(trust)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className={cn('h-full rounded-full transition-all', trustBar)} style={{ width: `${Math.min(100, trust)}%` }} />
+          </div>
+          <p className="text-[10px] text-stone-400 mt-1">
+            ≥70 — владелец поддерживает проект · &lt;35 — «разговор» · &lt;15 — финал «Управленца сменили»
+          </p>
+
+          <div className="mt-3 space-y-2">
+            {proposal && proposal.proposed > 0 ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900">
+                <p className="font-semibold">Активное предложение дивидендов (кв. {proposal.quarter})</p>
+                <p className="mt-0.5 tabular-nums">
+                  FCF квартала {proposal.fcf.toLocaleString('ru-RU')} ₽ · предложено{' '}
+                  {proposal.proposed.toLocaleString('ru-RU')} ₽ — решение ждёт в событиях.
+                </p>
+              </div>
+            ) : lastDividend ? (
+              <div className="rounded-lg bg-stone-50 p-2.5 text-xs text-stone-600">
+                <p className="font-semibold text-stone-700">Последняя выплата (кв. {lastDividend.quarter})</p>
+                <p className="mt-0.5 tabular-nums">
+                  {lastDividend.paid.toLocaleString('ru-RU')} ₽ из {lastDividend.proposed.toLocaleString('ru-RU')} ₽ · доверие{' '}
+                  {lastDividend.trustDelta >= 0 ? '+' : ''}
+                  {lastDividend.trustDelta}
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-lg bg-stone-50 p-2.5 text-xs text-stone-600">
+                <p className="font-semibold text-stone-700">Дивиденды: предложений ещё не было</p>
+                <p className="mt-0.5">Первое предложение — на закрытии 1-го квартала (нед 12).</p>
+              </div>
+            )}
+            {dividends && dividends.history.length > 1 && (
+              <div className="flex flex-wrap gap-1">
+                {dividends.history.map((h, i) => (
+                  <Badge
+                    key={i}
+                    variant="secondary"
+                    className={cn(
+                      'text-[10px] tabular-nums',
+                      h.trustDelta >= 0
+                        ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100'
+                        : 'bg-red-100 text-red-800 hover:bg-red-100',
+                    )}
+                  >
+                    кв{h.quarter}: {h.trustDelta >= 0 ? '+' : ''}
+                    {h.trustDelta}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Арендодатель */}
+        <div>
+          <div className="flex items-baseline justify-between mb-1">
+            <span className="text-sm font-medium text-stone-700">Отношения с арендодателем</span>
+            <span className={cn('text-sm font-bold tabular-nums', relationTone)}>
+              {Math.round(landlord?.relation ?? 60)}/100
+            </span>
+          </div>
+          <div
+            className="h-2 w-full rounded-full bg-stone-100 overflow-hidden"
+            role="progressbar"
+            aria-label="Отношения с арендодателем"
+            aria-valuenow={Math.round(landlord?.relation ?? 60)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div
+              className={cn(
+                'h-full rounded-full transition-all',
+                (landlord?.relation ?? 60) >= 70 ? 'bg-emerald-500' : (landlord?.relation ?? 60) >= 40 ? 'bg-amber-500' : 'bg-red-500',
+              )}
+              style={{ width: `${Math.min(100, landlord?.relation ?? 60)}%` }}
+            />
+          </div>
+          <p className="text-[10px] text-stone-400 mt-1">
+            ≥80 снижает квартальную индексацию аренды (−0,5 п.п.)
+          </p>
+
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+            <div className="rounded-lg bg-stone-50 p-2.5">
+              <p className="text-stone-500">База договора</p>
+              <p className="font-bold tabular-nums text-stone-800">{moneyShort(rentInfo.base)}</p>
+            </div>
+            <div className="rounded-lg bg-stone-50 p-2.5">
+              <p className="text-stone-500">Сейчас (инд. {rentInfo.quarters} кв.)</p>
+              <p className="font-bold tabular-nums text-stone-800">{moneyShort(rentInfo.current)}</p>
+            </div>
+          </div>
+          <div className="mt-2 flex items-start gap-1.5 text-xs text-stone-500">
+            <Building2 className="h-3.5 w-3.5 mt-0.5 shrink-0 text-stone-400" aria-hidden />
+            <p>
+              {landlord && landlord.nextTalkWeek > 0
+                ? landlord.nextTalkWeek > state.week
+                  ? `Следующий разговор о ставке — не раньше недели ${landlord.nextTalkWeek}.`
+                  : 'Разговор о пересмотре ставки ожидается на закрытии этой недели.'
+                : landlord?.nextTalkWeek === 0
+                  ? 'Диалог с арендодателем открыт — решите событие.'
+                  : landlord
+                    ? `Отказов подряд: ${landlord.refusals}${landlord.refusals >= 2 ? ' — ждите ультиматум' : ' — при втором последует ультиматум'}`
+                    : 'Договор без пересмотра.'}
+            </p>
+          </div>
+        </div>
+      </div>
+    </SectionCard>
   );
 }
 

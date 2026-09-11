@@ -41,6 +41,11 @@ import { INSURANCE_PAYROLL_SHARE } from './welfare';
 import { REVIEWS_V2 } from '../config/reviews.config';
 import { PROCUREMENT } from '../config/procurement.config';
 import { SECRETARY_EFFECTS } from '../config/staffRoles.config';
+import { DIVIDENDS, dividendProposal } from '../config/dividends.config';
+import { checkLandlordSchedule, currentRentMonthly } from './landlord';
+import { createOwnerDividendEvent, createOwnerTalkEvent, ownerReplaced } from './dividends';
+import { checkDilemmas, checkBribeScandal, checkChefQuit } from './dilemmas';
+import { franchiseRoyalty, leverageOf } from './permanent';
 
 export function closeWeek(state: GameState, seed: number): WeekSimulationResult {
   const draft = state; // мутируем переданный клон
@@ -74,6 +79,11 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
       : 0;
 
   // Начисления периодических расходов (ТЗ §18.5).
+  // БАЛ-v2 §6 (v8): аренда пересчитывается ДО начислений — квартальная
+  // индексация + шаги договорённостей с арендодателем согласованы с P&L.
+  if (restaurant.landlord) {
+    restaurant.rentMonthly = currentRentMonthly(restaurant, week);
+  }
   const rentAccrued = Math.round(restaurant.rentMonthly / 4);
   // СЕЗОННАЯ КОМПОНЕНТА КОММУНАЛЬНЫХ (дорожная карта §12.8): зимой отопление
   // +25%, летом кондиционирование/вентиляция +15% — коммуналка перестаёт быть
@@ -218,11 +228,99 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
         bscAvg >= 75 ? 'Отличный квартал' : bscAvg >= 55 ? 'Стабильный квартал' : 'Квартал ниже целевого',
       recommendations,
     };
+
+    // ===== БАЛ-v2 §13 (v8): ПРЕДЛОЖЕНИЕ ДИВИДЕНДОВ НА КОНЕЦ КВАРТАЛА =====
+    // FCF_кв = Δ кассы за квартал (все платежи честно идут транзакциями:
+    // тело кредита, оборудование, лицензии, налоги). DivQ = 40% × max(0, FCF)
+    // + 12% × max(0, NP − 3% выручки). Решение — крит-событие; доверие
+    // меняется в момент решения (setup.resolveEvent → applyDividendDecision).
+    {
+      const divState = (restaurant.finance.dividends ??= {
+        history: [],
+        lastProposal: null,
+        quarterStartCash: restaurant.finance.cash,
+      });
+      const fcfQ = restaurant.finance.cash - divState.quarterStartCash;
+      const proposed = dividendProposal(fcfQ, qProfit, qRevenue);
+      divState.lastProposal = {
+        quarter,
+        week,
+        fcf: Math.round(fcfQ),
+        netProfit: Math.round(qProfit),
+        revenue: Math.round(qRevenue),
+        proposed,
+      };
+      if (proposed > 0) {
+        draft.activeEvents.push(
+          createOwnerDividendEvent(
+            quarter,
+            week,
+            Math.round(fcfQ),
+            Math.round(qProfit),
+            Math.round(qRevenue),
+            proposed,
+            weekDate,
+          ),
+        );
+      }
+      // Точка отсчёта FCF следующего квартала — касса на закрытии (после
+      // всех платежей недели, включая зарплату/налоги/кредиты выше).
+      divState.quarterStartCash = restaurant.finance.cash;
+
+      // §12.2/§13.2: плечо > 1,5 на закрытии квартала — доверие −4
+      // (владелец видит баланс: ресторан живёт в долг).
+      const leverage = leverageOf(restaurant);
+      let trustAfter = restaurant.finance.ownerTrust ?? DIVIDENDS.trustStart;
+      if (leverage > DIVIDENDS.trustPenaltyAt) {
+        trustAfter = clamp(trustAfter - DIVIDENDS.trustPenalty, 0, 100);
+        restaurant.finance.ownerTrust = trustAfter;
+      }
+      // §13.2: доверие ниже порога → дилемма «Разговор с владельцем»
+      // (не чаще раза в квартал — создаётся только на закрытии).
+      if (
+        trustAfter < DIVIDENDS.trustDilemmaAt &&
+        !draft.activeEvents.some((e) => e.templateId === 'owner_talk')
+      ) {
+        draft.activeEvents.push(createOwnerTalkEvent(trustAfter, weekDate));
+      }
+    }
   }
 
   // ===== ТЕКУЧКА (конец недели) =====
   const turnoverRng = deriveRng(hashSeed(seed, week), 'turnover');
-  weeklyTurnover(restaurant, () => turnoverRng.next());
+  weeklyTurnover(restaurant, () => turnoverRng.next(), week);
+
+  // ===== БАЛ-v2 §15: ЕЖЕНЕДЕЛЬНЫЕ БРОСКИ ДИЛЕММ-ПОСЛЕДЕЙСТВИЙ =====
+  // Скандал из-за взятки (5%/год) и уход шефа после отказа — отдельные
+  // rng-потоки ('scandal'/'chef-quit'), существующие броски не сдвинуты.
+  {
+    const scandal = checkBribeScandal(draft, week, weekDate);
+    if (scandal) draft.activeEvents.push(scandal);
+    const chefQuit = checkChefQuit(draft, week, weekDate);
+    if (chefQuit) draft.activeEvents.push(chefQuit);
+  }
+
+  // ===== БАЛ-v2 §15: ТРИГГЕРЫ ДИЛЕММ (не чаще 1/квартал, от состояния) =====
+  checkDilemmas(draft, week, weekDate);
+
+  // ===== БАЛ-v2 §6: РАСПИСАНИЕ РАЗГОВОРОВ АРЕНДОДАТЕЛЯ =====
+  checkLandlordSchedule(draft, week);
+
+  // ===== БАЛ-v2 §15: РОЯЛТИ ФРАНШИЗЫ (если подписана) =====
+  // Движение денег (не P&L): доля сети с выручки недели.
+  {
+    const royalty = franchiseRoyalty(revenue, restaurant);
+    if (royalty > 0) {
+      addTransaction(
+        restaurant,
+        weekDate,
+        'other',
+        royalty,
+        'out',
+        `Роялти франшизы (${Math.round((restaurant.permanentEffects?.franchiseOwnerShare ?? 0) * 100)}% выручки)`,
+      );
+    }
+  }
 
   // ===== БАЛ-v2 §8 (механизм D): НЕОТВЕЧЕННЫЕ ОТЗЫВЫ → ЮР. РИСК =====
   // +0,3 × min(U, 30) в неделю; естественная релаксация −0,3/день уже в updateRisks.
@@ -310,11 +408,19 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   let gameStatus: GameStatus = draft.status;
   let gameOver = false;
 
-  const bankrupt =
+  // БАЛ-v2 §13.2 (v8): финал «Управленца сменили» — доверие владельца < 15.
+  // Проверяем при любой недоигранной неделе (не только 'open': статус мог
+  // уже стать 'stable'/'survived_12' — смена управленца актуальна всегда).
+  if (draft.phase !== 'gameover' && ownerReplaced(draft)) {
+    gameStatus = 'owner_replaced';
+    gameOver = true;
+    draft.phase = 'gameover';
+  } else
+  if (
     restaurant.finance.cash < LOSE_CONDITIONS.bankruptCash ||
     restaurant.finance.loans.some((l) => l.overduePayments >= 8) ||
-    draft.history.lowRatingWeeks >= LOSE_CONDITIONS.lowRatingWeeks;
-  if (bankrupt) {
+    draft.history.lowRatingWeeks >= LOSE_CONDITIONS.lowRatingWeeks
+  ) {
     gameStatus = 'bankrupt';
     gameOver = true;
     draft.phase = 'gameover';
@@ -371,6 +477,7 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     equipmentPaid: sumType('equipment'),
     loanDisbursements: sumType('loan_disbursement', 'in'),
     ownerContributions: sumType('other', 'in'),
+    dividendsPaid: sumType('dividend'),
     eventIncome: 0,
     cashEnd: restaurant.finance.cash,
   };

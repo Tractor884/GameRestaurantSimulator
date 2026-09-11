@@ -24,6 +24,8 @@ import { RENOVATION_LEVELS, EQUIPMENT_LEVELS } from '../config/premises.config';
 import { MARKETING_CHANNELS_MAP } from '../config/marketing.config';
 import { RISK_LIMITS } from '../config/risks.config';
 import { SECRETARY_EFFECTS } from '../config/staffRoles.config';
+import { serviceStatus, wearMult, breakMult } from '../config/equipmentService.config';
+import { eventFineMult } from './permanent';
 import type { Rng } from '../rng';
 import { clamp, dayIndex, addTransaction } from './core';
 
@@ -226,6 +228,8 @@ export function updateRisks(
     kitchenOverloadHours: number;
     avgStaffLoad: number;
     cashWarning: boolean;
+    /** Дата дня — для статуса профилактики оборудования (v8). */
+    date?: GameDate;
   },
 ): RiskChange[] {
   const changes: RiskChange[] = [];
@@ -265,8 +269,14 @@ export function updateRisks(
     }
   }
   // Технический риск отслеживает УРОВЕНЬ износа (не копит его): target = износ.
+  // ПРОФИЛАКТИКА (v8): свежее ТО снижает цель (поломки реже), запущенность
+  // (56+ дней без обслуживания) — повышает (поломки чаще).
   const avgWear = (restaurant.equipment.kitchen.wear + restaurant.equipment.coffee.wear) / 2;
-  const techTarget = Math.min(95, avgWear * 0.9 + ctx.kitchenOverloadHours * 2.5);
+  const breakFactor = ctx.date
+    ? (breakMult(serviceStatus(restaurant.equipment.kitchen.lastServicedAt, dayIndex(ctx.date))) +
+        breakMult(serviceStatus(restaurant.equipment.coffee.lastServicedAt, dayIndex(ctx.date)))) / 2
+    : 1;
+  const techTarget = Math.min(95, (avgWear * 0.9 + ctx.kitchenOverloadHours * 2.5) * breakFactor);
   {
     const old = restaurant.risks.technical;
     const v = clamp(old + (techTarget - old) * 0.25, RISK_LIMITS.min, RISK_LIMITS.max);
@@ -420,10 +430,13 @@ export function applyEventEffects(state: GameState, restaurant: Restaurant, even
       const secretaryScheduled = (restaurant.staff.schedule.secretary ?? []).some(
         (sh) => sh.morning + sh.evening > 0,
       );
+      // ДИЛЕММА «Инспектор» (отказ, §15): жёсткие проверки — штрафы ×1,6 навсегда.
+      // Стакается с секретарём честно (0,8 × 1,6 = 1,28 — «бумаги в порядке, но
+      // инспектор дотошный»).
       const fine =
         secretaryCount > 0 && secretaryScheduled
-          ? Math.round(-e.cash * (1 - SECRETARY_EFFECTS.fineDiscount))
-          : Math.round(-e.cash);
+          ? Math.round(-e.cash * (1 - SECRETARY_EFFECTS.fineDiscount) * eventFineMult(restaurant))
+          : Math.round(-e.cash * eventFineMult(restaurant));
       addTransaction(restaurant, event.date, 'fine', fine, 'out', `Событие: ${event.title}`);
     }
   }
@@ -474,20 +487,26 @@ export function updateComfortAtmosphere(restaurant: Restaurant, month: number): 
 const VERANDA_MONTHS = [5, 6, 7, 8, 9];
 
 /** Износ оборудования: медленный темп (полный износ ~год игры), техобслуживание
- * (оплачивается еженедельно в week.ts) дополнительно замедляет. */
-export function updateEquipmentWear(restaurant: Restaurant, kitchenLoad: number): void {
+ * (оплачивается еженедельно в week.ts) дополнительно замедляет.
+ * ПРОФИЛАКТИКА (v8): окно защиты после ТО — износ ×0,5; запущенность
+ * (56+ дней без обслуживания) — износ ×1,3. */
+export function updateEquipmentWear(restaurant: Restaurant, kitchenLoad: number, date?: GameDate): void {
   const loadFactor = 0.6 + Math.max(0, kitchenLoad) * 0.8;
   const K = 0.12;
+  const absDay = date ? dayIndex(date) : undefined;
+  const kitchenMult = absDay == null ? 1 : wearMult(serviceStatus(restaurant.equipment.kitchen.lastServicedAt, absDay));
+  const coffeeMult = absDay == null ? 1 : wearMult(serviceStatus(restaurant.equipment.coffee.lastServicedAt, absDay));
+  const hallMult = absDay == null ? 1 : wearMult(serviceStatus(restaurant.equipment.hall.lastServicedAt, absDay));
   restaurant.equipment.kitchen.wear = clamp(
-    restaurant.equipment.kitchen.wear + EQUIPMENT_LEVELS[restaurant.equipment.kitchen.level].wearRate * K * loadFactor,
+    restaurant.equipment.kitchen.wear + EQUIPMENT_LEVELS[restaurant.equipment.kitchen.level].wearRate * K * loadFactor * kitchenMult,
     0, 100,
   );
   restaurant.equipment.coffee.wear = clamp(
-    restaurant.equipment.coffee.wear + EQUIPMENT_LEVELS[restaurant.equipment.coffee.level].wearRate * K * loadFactor * 0.8,
+    restaurant.equipment.coffee.wear + EQUIPMENT_LEVELS[restaurant.equipment.coffee.level].wearRate * K * loadFactor * 0.8 * coffeeMult,
     0, 100,
   );
   restaurant.equipment.hall.wear = clamp(
-    restaurant.equipment.hall.wear + EQUIPMENT_LEVELS[restaurant.equipment.hall.level].wearRate * K * 0.5,
+    restaurant.equipment.hall.wear + EQUIPMENT_LEVELS[restaurant.equipment.hall.level].wearRate * K * 0.5 * hallMult,
     0, 100,
   );
 }

@@ -41,6 +41,7 @@ import { simulateHour, type QueueEntry } from './hour';
 import { processDeliveries, processEndOfDayLosses, buildAutoOrder, placePurchase } from './inventory';
 import { accruePayrollDay, updateFatigue, averageFatigue, dayCoverage } from './staff';
 import { closeWeek } from './weekclose';
+import { payrollWageMult } from './permanent';
 import {
   generateReviews,
   addReviews,
@@ -331,14 +332,15 @@ export function finishDay(
     addTransaction(restaurant, date, 'marketing', Math.round(marketingDaily), 'out', 'Маркетинг: дневной бюджет');
   }
   // Начисление зарплаты (ТЗ §14.10): выплата в конце недели.
+  // ДИЛЕММА «Кризис» (поднять оклады, §15): ФОТ ×wageRaise навсегда.
   const payroll = accruePayrollDay(restaurant, date);
-  restaurant.finance.accrued.payrollGross += payroll;
+  restaurant.finance.accrued.payrollGross += Math.round(payroll * payrollWageMult(restaurant));
 
   // ===== 4. КОНЕЦ ДНЯ =====
   const { wasteCost, expiredCount, nearExpiryCount } = processEndOfDayLosses(restaurant, date);
   updateCleanliness(restaurant, guests);
   updateComfortAtmosphere(restaurant, monthOfDay(dayOfYear(date.week, date.day)));
-  updateEquipmentWear(restaurant, totals.kitchenOverloadHours > 0 ? 1.2 : 0.7);
+  updateEquipmentWear(restaurant, totals.kitchenOverloadHours > 0 ? 1.2 : 0.7, date);
   // Усталость: пофункциональные нагрузки (пик по «горячим» часам дня).
   const roleLoads = buildRoleLoads(hourLogs);
   updateFatigue(restaurant, date, roleLoads, DIFFICULTIES[draft.difficultyId]?.staffFatigueRate ?? 1);
@@ -378,6 +380,7 @@ export function finishDay(
     kitchenOverloadHours: totals.kitchenOverloadHours,
     avgStaffLoad,
     cashWarning: restaurant.finance.cash < DIFFICULTIES[draft.difficultyId]?.cashBuffer * 0.3,
+    date,
   });
 
   // События (ТЗ §20): некритические применяются сразу, критические — на паузу.

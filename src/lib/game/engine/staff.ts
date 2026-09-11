@@ -11,6 +11,7 @@ import { STAFF_ROLES, STAFF_DYNAMICS, ROLE_IDS } from '../config/staffRoles.conf
 import { EQUIPMENT_LEVELS } from '../config/premises.config';
 import { STATIONS } from '../config/staffRoles.config';
 import { clamp } from './core';
+import { quitProbMult, fatigueGrowthMult } from './permanent';
 
 /** Почасовая ставка роли: оклад / 167 ч. */
 export function hourlyRate(roleId: RoleId): number {
@@ -204,7 +205,10 @@ export function updateFatigue(
     // сложности (иначе Professional «выздоравливал» бы тоже в ×1.3 быстрее и
     // множитель взаимно гасился на равновесии, что показал difficulty-test).
     const scaled = growth > 0 ? growth * diffFatigueRate : growth;
-    pool.fatigue = clamp(pool.fatigue + scaled, 0, 100);
+    // ДИЛЕММА «Кризис» (держаться, §15): усталость копится быстрее (×1,3)
+    // в окне кадрового кризиса — команда «пережидает волну» на износ.
+    const crisis = growth > 0 ? fatigueGrowthMult(restaurant, date.week) : 1;
+    pool.fatigue = clamp(pool.fatigue + scaled * crisis, 0, 100);
     // Мораль: усталость и перегрузка давят, чаевые поднимают (в day.ts).
     // Медстраховка (благосостояние): падение морали медленнее (×0.24).
     const targetMorale = clamp(85 - pool.fatigue * 0.5 - Math.max(0, roleLoad - 1) * 30, 0, 100);
@@ -230,16 +234,18 @@ export function applyQuit(restaurant: Restaurant, roleId: RoleId): boolean {
 }
 
 /** Текучка: шанс увольнения при низкой морали (вызывается в конце недели).
- *  Медстраховка (благосостояние): риск увольнения ×0.6. */
-export function weeklyTurnover(restaurant: Restaurant, rngChance: () => number): string[] {
+ *  Медстраховка (благосостояние): риск увольнения ×0.6.
+ *  ДИЛЕММА «Шеф» (отказ, §15): окно обиды — увольнения ×mult. */
+export function weeklyTurnover(restaurant: Restaurant, rngChance: () => number, week = 0): string[] {
   const fired: string[] = [];
   const insured = restaurant.staff.insurance === true;
+  const quitMult = quitProbMult(restaurant, week);
   for (const roleId of ROLE_IDS) {
     const pool = restaurant.staff.pools[roleId];
     if (pool.count <= 0) continue;
     if (pool.morale < STAFF_DYNAMICS.quitMoraleThreshold) {
       const p = STAFF_DYNAMICS.quitChanceAtZeroMorale * (1 - pool.morale / STAFF_DYNAMICS.quitMoraleThreshold);
-      if (rngChance() < p * pool.count * (insured ? 0.6 : 1)) {
+      if (rngChance() < p * pool.count * (insured ? 0.6 : 1) * quitMult) {
         pool.count -= 1;
         fired.push(STAFF_ROLES[roleId].name);
       }

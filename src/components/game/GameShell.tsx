@@ -409,7 +409,9 @@ export function GameShell() {
           </DialogHeader>
           {pendingCritical && (
             <div className="space-y-2">
-              {EVENT_TEMPLATES_MAP[pendingCritical.templateId]?.resolutions?.map((res, i) => (
+              {/* Динамические резолюции системных событий (дилеммы/дивиденды/
+                  арендодатель/уход шефа, v8) приоритетнее шаблона пула. */}
+              {(pendingCritical.resolutions ?? EVENT_TEMPLATES_MAP[pendingCritical.templateId]?.resolutions)?.map((res, i) => (
                 <button
                   key={i}
                   onClick={() => resolveCritical(pendingCritical.id, i)}

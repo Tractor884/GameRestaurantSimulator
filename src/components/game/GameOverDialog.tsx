@@ -1,5 +1,8 @@
 /**
- * ФИНАЛЬНЫЙ ЭКРАН (ТЗ §37): счёт игры, статус ресторана, разбор 6 компонент.
+ * ФИНАЛЬНЫЙ ЭКРАН (ТЗ §37 + БАЛ-v2 §20): финальный РАНГ D−…A+ из 4 осей
+ * (рейтинг × маржа × BSC × текучесть), спец-финалы («Кухня со звёздами»,
+ * «Переезд», «Управленца сменили», причины банкротства), счёт игры по
+ * 6 компонентам и динамические советы по слабым осям.
  *
  * Требование пользователя: окно НЕ закрывается само — пользователь сам решает,
  * когда закрыть (кнопка). После закрытия в топбаре остаётся кнопка «Результаты»,
@@ -10,6 +13,16 @@
 import { useGame } from '@/lib/game/store/gameStore';
 import { STATUS_LABELS } from '@/lib/game/config/difficulty.config';
 import { FINAL_SCORE_WEIGHTS } from '@/lib/game/config/bsc.config';
+import {
+  computeFinalGrade,
+  RANK_PRESENTATION,
+  STARS_FINAL,
+  OWNER_REPLACED_FINAL,
+  RELOCATION_FINAL,
+  BANKRUPT_REASONS,
+  axisHints,
+  GRADE_AXIS_WEIGHTS,
+} from '@/lib/game/engine';
 import { ScoreBar, money, moneyShort } from './widgets';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -25,6 +38,9 @@ import {
   Banknote,
   Users,
   CalendarDays,
+  MapPin,
+  Sparkles,
+  Lightbulb,
 } from 'lucide-react';
 
 export function GameOverDialog() {
@@ -36,75 +52,116 @@ export function GameOverDialog() {
   if (!state || state.phase !== 'gameover') return null;
 
   const fs = state.weekResult?.finalScore;
-  const isWin = state.status !== 'bankrupt' && state.status !== 'stable';
+  const grade = computeFinalGrade(state);
+  const rankPres = RANK_PRESENTATION[grade.rank];
+  const isWin = state.status !== 'bankrupt' && state.status !== 'stable' && state.status !== 'owner_replaced';
   const restaurant = state.restaurant!;
   const weeksLived = state.history.weekStats.length;
+  const hints = axisHints(grade);
 
-  const grade = !fs
-    ? null
-    : fs.total >= 850
-      ? { icon: Trophy, label: 'Легендарный ресторан', cls: 'text-amber-600' }
-      : fs.total >= 700
-        ? { icon: Award, label: 'Отличный результат', cls: 'text-emerald-600' }
-        : fs.total >= 550
-          ? { icon: Award, label: 'Уверенный результат', cls: 'text-emerald-600' }
-          : fs.total >= 400
-            ? { icon: Star, label: 'Средний результат', cls: 'text-amber-600' }
-            : { icon: AlertOctagon, label: 'Ниже ожиданий', cls: 'text-red-600' };
+  const HeadIcon =
+    state.status === 'bankrupt'
+      ? AlertOctagon
+      : state.status === 'owner_replaced'
+        ? Users
+        : grade.special.starsKitchen
+          ? Sparkles
+          : Trophy;
 
-  const HeadIcon = state.status === 'bankrupt' ? AlertOctagon : grade ? grade.icon : Star;
+  const headGradient = state.status === 'bankrupt'
+    ? 'bg-gradient-to-br from-red-800 to-red-950'
+    : state.status === 'owner_replaced'
+      ? 'bg-gradient-to-br from-stone-700 to-stone-900'
+      : isWin
+        ? `bg-gradient-to-br ${rankPres.headCls}`
+        : `bg-gradient-to-br ${rankPres.headCls}`;
 
   return (
     <Dialog open={!finalSeen} onOpenChange={(open) => !open && hideFinal()}>
       <DialogContent
         className="sm:max-w-2xl max-h-[92vh] overflow-y-auto p-0 gap-0 overflow-x-hidden"
       >
-        {/* Шапка: вердикт + статус (DialogTitle внутри — требование доступности Radix) */}
+        {/* Шапка: РАНГ + вердикт + статус (DialogTitle внутри — требование доступности Radix) */}
         <DialogHeader className="p-0 space-y-0">
         <DialogTitle asChild>
-        <div
-          className={cn(
-            'rounded-t-lg px-6 py-6 text-white',
-            state.status === 'bankrupt'
-              ? 'bg-gradient-to-br from-red-800 to-red-950'
-              : isWin
-                ? 'bg-gradient-to-br from-amber-600 to-amber-800'
-                : 'bg-gradient-to-br from-stone-600 to-stone-800',
-          )}
-        >
+        <div className={cn('rounded-t-lg px-6 py-6 text-white', headGradient)}>
           <div className="flex items-center gap-4 flex-wrap">
             <div className="rounded-2xl bg-white/15 p-3 shrink-0">
               <HeadIcon className="h-9 w-9" aria-hidden />
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-xs uppercase tracking-widest opacity-80">
-                {state.status === 'bankrupt' ? 'Игра окончена' : 'Финал 52 недель'}
+                {state.status === 'bankrupt'
+                  ? 'Игра окончена'
+                  : state.status === 'owner_replaced'
+                    ? 'Игра окончена'
+                    : 'Финал 52 недель'}
               </p>
               <p className="text-2xl font-bold leading-tight">
-                {state.status === 'bankrupt' ? 'Банкротство' : grade?.label ?? 'Результат'}
+                {state.status === 'bankrupt'
+                  ? 'Банкротство'
+                  : state.status === 'owner_replaced'
+                    ? OWNER_REPLACED_FINAL.title
+                    : rankPres.title}
               </p>
               <p className="text-sm opacity-90 mt-0.5">
                 «{restaurant.name}» · {STATUS_LABELS[state.status]} · пройдено {weeksLived}{' '}
                 {weeksLived % 10 === 1 && weeksLived % 100 !== 11 ? 'неделя' : 'недель'}
               </p>
             </div>
-            {fs && (
-              <div className="ml-auto text-right shrink-0">
-                <p className="text-5xl font-black tabular-nums leading-none">{fs.total}</p>
-                <p className="text-xs opacity-80 mt-1">из 1000 очков</p>
-              </div>
-            )}
+            {/* Ранг A+…D− */}
+            <div className="ml-auto text-right shrink-0">
+              <p className={cn('text-5xl font-black leading-none', 'text-white drop-shadow')}>{rankPres.label}</p>
+              <p className="text-[10px] opacity-80 mt-1 uppercase tracking-wider">
+                ранг · {(grade.score * 100).toFixed(0)} / 100
+              </p>
+            </div>
           </div>
         </div>
         </DialogTitle>
         <DialogDescription asChild>
           <span className="sr-only">
-            Итоговый счёт {fs?.total ?? '—'} из 1000. Статус: {STATUS_LABELS[state.status]}.
+            Финальный ранг {rankPres.label}. Счёт {fs?.total ?? '—'} из 1000. Статус:{' '}
+            {STATUS_LABELS[state.status]}.
           </span>
         </DialogDescription>
         </DialogHeader>
 
         <div className="p-6 space-y-6">
+          {/* Текст ранга / спец-финала */}
+          <div className="rounded-xl border border-stone-200 bg-stone-50 p-4">
+            <p className="text-sm text-stone-700 leading-relaxed">{rankPres.text}</p>
+            <p className="text-xs text-stone-500 mt-2 flex items-start gap-1.5">
+              <Lightbulb className="h-3.5 w-3.5 shrink-0 mt-0.5 text-amber-600" aria-hidden />
+              {rankPres.advice}
+            </p>
+          </div>
+
+          {/* Спец-финалы (§20) */}
+          {(grade.special.starsKitchen || grade.special.relocated || grade.special.ownerReplaced || grade.special.bankrupt) && (
+            <div className="space-y-3">
+              <p className="text-sm font-semibold text-stone-800">Особые обстоятельства финала</p>
+              {grade.special.starsKitchen && (
+                <SpecialFinalCard icon={Sparkles} title={STARS_FINAL.title} text={STARS_FINAL.text} advice={STARS_FINAL.advice} tone="amber" />
+              )}
+              {grade.special.relocated && (
+                <SpecialFinalCard icon={MapPin} title={RELOCATION_FINAL.title} text={RELOCATION_FINAL.text} advice={RELOCATION_FINAL.advice} tone="stone" />
+              )}
+              {grade.special.ownerReplaced && (
+                <SpecialFinalCard icon={Users} title={OWNER_REPLACED_FINAL.title} text={OWNER_REPLACED_FINAL.text} advice={OWNER_REPLACED_FINAL.advice} tone="red" />
+              )}
+              {grade.special.bankrupt && grade.special.bankruptReason && (
+                <SpecialFinalCard
+                  icon={AlertOctagon}
+                  title={BANKRUPT_REASONS[grade.special.bankruptReason].title}
+                  text={BANKRUPT_REASONS[grade.special.bankruptReason].text}
+                  advice={BANKRUPT_REASONS[grade.special.bankruptReason].advice}
+                  tone="red"
+                />
+              )}
+            </div>
+          )}
+
           {/* Ключевые цифры */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
             <FinalStat
@@ -132,6 +189,53 @@ export function GameOverDialog() {
             />
           </div>
 
+          {/* 4 оси ранга (рейтинг × маржа × BSC × текучесть) */}
+          <div>
+            <p className="text-sm font-semibold text-stone-800 mb-3 flex items-center gap-2 flex-wrap">
+              Оси ранга {grade.rank}
+              <span className="text-xs font-normal text-stone-400">
+                рейтинг 30% · маржа 25% · BSC 30% · текучесть 15%
+              </span>
+              <Badge variant="secondary" className="bg-stone-100 text-stone-600 tabular-nums">
+                скор {(grade.score * 100).toFixed(0)}/100
+              </Badge>
+            </p>
+            <div className="space-y-3.5">
+              <GradeAxisBar
+                label="Рейтинг гостей"
+                hint={`${grade.metrics.rating.toFixed(2)} ★ (анкеры 3,2–4,8)`}
+                value={grade.axes.rating}
+              />
+              <GradeAxisBar
+                label="Годовая маржа"
+                hint={`${grade.metrics.marginPct.toFixed(1)}% чистой (полная — 14%)`}
+                value={grade.axes.margin}
+              />
+              <GradeAxisBar
+                label="BSC квартала"
+                hint={`средний ${grade.metrics.bscAvg.toFixed(0)}/100 (35–85)`}
+                value={grade.axes.bsc}
+              />
+              <GradeAxisBar
+                label="Стабильность команды"
+                hint={`текучесть ~${grade.metrics.turnoverPct.toFixed(0)}% (≤15% — отлично)`}
+                value={grade.axes.turnover}
+              />
+            </div>
+            {/* Динамические советы по слабым осям */}
+            {hints.length > 0 && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-1.5">
+                <p className="text-xs font-semibold text-amber-800">Куда расти (слабые оси)</p>
+                {hints.map((h) => (
+                  <p key={h.axis} className="text-xs text-amber-900/90 flex gap-1.5">
+                    <span className="font-semibold shrink-0">{h.axis}:</span>
+                    <span>{h.hint}</span>
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Разбор счёта по 6 компонентам */}
           {fs ? (
             <div>
@@ -140,6 +244,7 @@ export function GameOverDialog() {
                 <span className="text-xs font-normal text-stone-400">
                   (6 направлений с весами итога)
                 </span>
+                <span className="ml-auto text-lg font-black tabular-nums text-stone-800">{fs.total}<span className="text-xs font-normal text-stone-400">/1000</span></span>
               </p>
               <div className="space-y-3.5">
                 <FinalScoreBar
@@ -203,6 +308,10 @@ export function GameOverDialog() {
               <b>Банкротство</b> — деньги кончились (или рейтинг/долги добили). Попробуйте снова:
               ранние недели решают многое.
             </p>
+            <p>
+              <b>Управленца сменили</b> — доверие владельца упало ниже 15: неплаченные дивиденды и
+              споры о развитии стоили должности.
+            </p>
           </div>
 
           {/* Действия: пользователь сам решает, когда закрыть */}
@@ -232,6 +341,73 @@ export function GameOverDialog() {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Карточка спец-финала (§20). */
+function SpecialFinalCard({
+  icon: Icon,
+  title,
+  text,
+  advice,
+  tone,
+}: {
+  icon: typeof Star;
+  title: string;
+  text: string;
+  advice: string;
+  tone: 'amber' | 'stone' | 'red';
+}) {
+  const cls = {
+    amber: 'border-amber-300 bg-amber-50/70',
+    stone: 'border-stone-300 bg-stone-50',
+    red: 'border-red-300 bg-red-50/60',
+  }[tone];
+  const iconCls = {
+    amber: 'text-amber-600',
+    stone: 'text-stone-500',
+    red: 'text-red-600',
+  }[tone];
+  return (
+    <div className={cn('rounded-xl border p-4', cls)}>
+      <p className="text-sm font-bold text-stone-800 flex items-center gap-2">
+        <Icon className={cn('h-4 w-4 shrink-0', iconCls)} aria-hidden />
+        {title}
+      </p>
+      <p className="text-xs text-stone-600 mt-1.5 leading-relaxed">{text}</p>
+      <p className="text-[11px] text-stone-500 mt-2 flex items-start gap-1.5">
+        <Lightbulb className="h-3 w-3 shrink-0 mt-0.5 text-amber-600" aria-hidden />
+        {advice}
+      </p>
+    </div>
+  );
+}
+
+/** Полоса оси ранга 0..1 (двухцветная подсветка слабых зон). */
+function GradeAxisBar({ label, hint, value }: { label: string; hint: string; value: number }) {
+  const pctValue = Math.round(value * 100);
+  const color =
+    value >= 0.6 ? 'bg-emerald-500' : value >= 0.35 ? 'bg-amber-500' : 'bg-red-400';
+  return (
+    <div>
+      <div className="flex items-baseline justify-between text-xs mb-1">
+        <span className="text-stone-700 font-medium">
+          {label}
+          <span className="text-stone-400 font-normal"> — {hint}</span>
+        </span>
+        <span className="font-semibold tabular-nums text-stone-800">{pctValue}%</span>
+      </div>
+      <div
+        className="h-2 w-full rounded-full bg-stone-100 overflow-hidden"
+        role="progressbar"
+        aria-label={label}
+        aria-valuenow={pctValue}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
+        <div className={cn('h-full rounded-full transition-all', color)} style={{ width: `${pctValue}%` }} />
+      </div>
+    </div>
   );
 }
 
@@ -296,6 +472,7 @@ export function FinalStatusBadge() {
   const showFinal = useGame((s) => s.showFinal);
   if (!state || state.phase !== 'gameover') return null;
   const fs = state.weekResult?.finalScore;
+  const grade = computeFinalGrade(state);
   return (
     <button
       onClick={showFinal}
@@ -304,6 +481,7 @@ export function FinalStatusBadge() {
     >
       <Trophy className="h-3.5 w-3.5 text-amber-400" aria-hidden />
       {STATUS_LABELS[state.status]}
+      <span className="tabular-nums">· ранг {grade.rank}</span>
       {fs != null && <span className="tabular-nums">· {fs.total}/1000</span>}
       <span className="opacity-70">· Результаты</span>
     </button>

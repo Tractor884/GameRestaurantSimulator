@@ -27,6 +27,7 @@ import {
   setCleaningBudget,
   buyEquipment,
   repairEquipment,
+  serviceEquipment,
   deepCleaning,
   buyAlcoholLicense,
   repayLoan,
@@ -122,6 +123,8 @@ interface GameStore {
   cleaning(weekly: number): void;
   equipment(zone: 'kitchen' | 'coffee' | 'hall', level: 'basic' | 'standard' | 'professional'): void;
   equipmentRepair(zone: 'kitchen' | 'coffee' | 'hall'): void;
+  /** Профилактика оборудования (v8): ТО зоны — дешевле ремонта, окно защиты. */
+  equipmentService(zone: 'kitchen' | 'coffee' | 'hall'): void;
   deepClean(): void;
   /** Благосостояние (v6): премия всему штату. */
   bonus(): void;
@@ -333,6 +336,7 @@ export const useGame = create<GameStore>((set, get) => ({
   cleaning: (weekly) => get().apply((st) => setCleaningBudget(st, weekly)),
   equipment: (zone, level) => get().apply((st) => buyEquipment(st, zone, level)),
   equipmentRepair: (zone) => get().apply((st) => repairEquipment(st, zone)),
+  equipmentService: (zone) => get().apply((st) => serviceEquipment(st, zone)),
   deepClean: () => get().apply((st) => deepCleaning(st)),
   bonus: () => get().apply((st) => payBonus(st)),
   training: (roleId) => get().apply((st) => trainRole(st, roleId)),
@@ -443,7 +447,10 @@ export const useGame = create<GameStore>((set, get) => ({
  *  приоритет у пользовательских загрузок) и вкладка главного экрана.
  *  v6: благосостояние — страховка/кулдауны премий и тренингов.
  *  v7: БАЛ-v2 — режим закупки (§9, старт standard), неотвеченные отзывы
- *  (§8) и роль «секретарь» (админ-роль, стартует не нанятой). */
+ *  (§8) и роль «секретарь» (админ-роль, стартует не нанятой).
+ *  v8: порт БАЛ-v2 из ветки v1.0.0 — цепочка арендодателя (§6), дивиденды
+ *  и доверие владельца (§13), дилеммы (§15), финальные ранги (§20) и
+ *  профилактика оборудования (запрос пользователя). */
 function migrateState(state: GameState): void {
   const r = state.restaurant;
   // v4: настройки геймплея.
@@ -468,7 +475,39 @@ function migrateState(state: GameState): void {
     if (!r.staff.schedule.secretary) {
       r.staff.schedule.secretary = [0, 1, 2, 3, 4, 5, 6].map(() => ({ morning: 0, evening: 0 }));
     }
+
+    // ===== v8: ПОРТ БАЛ-v2 =====
+    // Арендодатель: индексация стартует с текущей недели (nextTalk через 8–16
+    // нед от миграции — детерминировано от seed), rentBase = текущая аренда.
+    if (!r.landlord) {
+      const rng = mulberryLike(state.seed, 'landlord');
+      r.landlord = {
+        relation: 60,
+        refusals: 0,
+        nextTalkWeek: state.week + 8 + Math.floor(rng * 9),
+        rentBase: r.rentMonthly,
+        stepSum: 0,
+      };
+    }
+    // Дивиденды/доверие владельца.
+    if (r.finance.ownerTrust == null) r.finance.ownerTrust = 60;
+    if (!r.finance.dividends) {
+      r.finance.dividends = { history: [], lastProposal: null, quarterStartCash: r.finance.cash };
+    }
+    // Перманентные эффекты дилемм + окна триггеров.
+    if (!r.permanentEffects) r.permanentEffects = {};
+    if (r.lastDilemmaWeek == null) r.lastDilemmaWeek = 0;
+    if (r.fatigueHighWeeks == null) r.fatigueHighWeeks = 0;
+    if (r.ratingHighWeeks == null) r.ratingHighWeeks = 0;
+    if (r.leverageHighWeeks == null) r.leverageHighWeeks = 0;
+    // Профилактика: считаем оборудование обслуженным на день миграции
+    // (старые сейвы не получают мгновенный штраф запущенности).
+    const absDay = (state.week - 1) * 7 + state.day;
+    for (const zone of ['kitchen', 'coffee', 'hall'] as const) {
+      if (r.equipment[zone].lastServicedAt == null) r.equipment[zone].lastServicedAt = absDay;
+    }
   }
+  if (state.history.relocations == null) state.history.relocations = 0;
   if (r) {
     // v4: кастомные блюда (CSV-импорт новых блюд §35.3–35.4).
     if (!r.menu.customDishes) r.menu.customDishes = [];
@@ -501,6 +540,19 @@ function migrateState(state: GameState): void {
   for (const w of state.history.weekStats) {
     if (w.returningShare == null) w.returningShare = 0;
   }
+}
+
+/** Мини-детерминированное число для миграции (без импорта rng в стор):
+ *  hash(seed + 'landlord') → [0,1). Стабильно между запусками. */
+function mulberryLike(seed: number, tag: string): number {
+  let h = 2166136261 >>> 0;
+  h ^= seed >>> 0;
+  h = Math.imul(h, 16777619);
+  for (let i = 0; i < tag.length; i++) {
+    h ^= tag.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) / 4294967296;
 }
 
 function persist(key: string, state: GameState, name?: string) {
