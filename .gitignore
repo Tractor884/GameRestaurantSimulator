@@ -52,3 +52,10 @@ prompt
 server.log
 # Skills directory
 /skills/
+# ===== артефакты песочницы (не часть игры) =====
+/db/
+/tool-results/
+/download/
+/tests/
+/.zscripts/
+/examples/
