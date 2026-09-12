@@ -27,7 +27,8 @@ import { SECRETARY_EFFECTS } from '../config/staffRoles.config';
 import { serviceStatus, wearMult, breakMult } from '../config/equipmentService.config';
 import { haccpStatus, haccpTargetMult } from '../config/haccp.config';
 import { eventFineMult } from './permanent';
-import type { Rng } from '../rng';
+import { menuFreshnessFactor } from './menufatigue';
+import { deriveRng, hashSeed, type Rng } from '../rng';
 import { clamp, dayIndex, addTransaction } from './core';
 
 /* ============================= ОТЗЫВЫ И РЕЙТИНГ ============================= */
@@ -189,6 +190,9 @@ export function returningDemandForDay(
   // БАЛ-v2 §8 (механизм D): возвратность −0,2 п.п. за каждые 5 неотвеченных
   // (кап −3 п.п.) — накопленные жалобы отпугивают постоянных гостей.
   const retFactor = unansweredReturningFactor(restaurant.reputation.unansweredNeg ?? 0);
+  // v10 §14 (меню-усталость): постоянным гостям приедается статичное меню —
+  // возвратный спрос × свежесть меню (−7,5%/квартал без ротации, кап −12%).
+  const freshFactor = menuFreshnessFactor(restaurant);
   const surviving: typeof restaurant.customerMemory.cohorts = [];
   for (const cohort of restaurant.customerMemory.cohorts) {
     cohort.ageDays = todayIdx - dayIndex(cohort.date);
@@ -206,8 +210,9 @@ export function returningDemandForDay(
       continue;
     }
     const decay = Math.pow(RETURNS_CONFIG.decayFactorPerWeek, ageWeeks);
-    // Равномерно по дням окна задержки: P/окно × затухание × фактор отзывов (§8).
-    const guests = (cohort.remainingReturnPotential / window) * decay * retFactor;
+    // Равномерно по дням окна задержки: P/окно × затухание × фактор отзывов (§8)
+    // × свежесть меню (§14, v10).
+    const guests = (cohort.remainingReturnPotential / window) * decay * retFactor * freshFactor;
     out[cohort.segmentId] += guests;
     surviving.push(cohort);
   }
@@ -461,9 +466,14 @@ export function applyEventEffects(state: GameState, restaurant: Restaurant, even
     }
   }
   if (e.staffQuit) {
-    const roles = ['hot_cook', 'waiter', 'cold_cook', 'dishwasher'];
-    const role = roles[Math.floor(Math.random() * roles.length)];
-    const pool = restaurant.staff.pools[role as keyof typeof restaurant.staff.pools];
+    // ДЕТЕРМИННИЗМ (§21): Math.random в движке был ЗАПРЕЩЁН, но здесь
+    // доживал исторический вызов — полная игра (52 нед) не была
+    // воспроизводимой. Роль уходит детерминированно: поток 'staff-quit'
+    // от seed × дня события (все существующие броски не тронуты).
+    const rng = deriveRng(hashSeed(state.seed, dayIndex(event.date)), 'staff-quit');
+    const roles = ['hot_cook', 'waiter', 'cold_cook', 'dishwasher'] as const;
+    const role = roles[Math.floor(rng.next() * roles.length)];
+    const pool = restaurant.staff.pools[role];
     if (pool && pool.count > 1) pool.count -= 1;
   }
   if (e.equipmentBreak) {

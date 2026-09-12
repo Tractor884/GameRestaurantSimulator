@@ -20,6 +20,14 @@ import {
 import type { Rng } from '../rng';
 import { dayIndex } from './core';
 
+/** Индекс инфляции закупочных цен (БАЛ-v2 §10, v10): 1.0 на старте,
+ *  растёт квартальными шагами (+10%/год). Идиомы «?? 1» достаточно —
+ *  placePurchase вызывается только с созданным рестораном (миграция v10
+ *  гарантирует поле). */
+export function foodInflationIdx(restaurant: Restaurant): number {
+  return restaurant.finance.inflation?.foodIdx ?? 1;
+}
+
 /** Доступно ли количество ингредиента (с учётом всех партий FIFO). */
 export function availableQuantity(state: InventoryState, ingredientId: string): number {
   return state.batches
@@ -106,7 +114,11 @@ export function placePurchase(
 ): { unitCost: number; paid: number; arrivesAt: GameDate } {
   const ing = INGREDIENTS_MAP[ingredientId];
   // БАЛ-v2 §9: цены × множитель режима закупки (эконом ×0,93 / премиум ×1,03).
-  const baseCost = ing.baseCost * procPriceMult(activeProcurement(restaurant));
+  // БАЛ-v2 §10 (v10): × индекс инфляции закупок (квартальные шаги, +10%/год).
+  const baseCost =
+    ing.baseCost *
+    procPriceMult(activeProcurement(restaurant)) *
+    foodInflationIdx(restaurant);
   const unitCost = urgent ? baseCost * (1 + URGENT_PURCHASE_MARKUP) : baseCost;
   const paid = Math.round(unitCost * quantity);
   const arrivesAt: GameDate = urgent

@@ -43,26 +43,100 @@ import {
   GraduationCap,
 } from 'lucide-react';
 
-import { RestaurantScreen } from './screens/RestaurantScreen';
-import { MenuScreen } from './screens/MenuScreen';
-import { WarehouseScreen } from './screens/WarehouseScreen';
-import { StaffScreen } from './screens/StaffScreen';
-import { ScheduleScreen } from './screens/ScheduleScreen';
-import { FinanceScreen } from './screens/FinanceScreen';
-import { AnalyticsScreen } from './screens/AnalyticsScreen';
-import { MarketingScreen } from './screens/MarketingScreen';
-import { ReviewsScreen } from './screens/ReviewsScreen';
-import { EventsScreen } from './screens/EventsScreen';
-import { LicensesScreen } from './screens/LicensesScreen';
-import { EquipmentScreen } from './screens/EquipmentScreen';
-import { LoansScreen } from './screens/LoansScreen';
-import { QuarterlyScreen } from './screens/QuarterlyScreen';
-import { SettingsScreen } from './screens/SettingsScreen';
-import { ArtManagerScreen } from './screens/ArtManagerScreen';
-import { AcademyScreen } from './screens/AcademyScreen';
 import { GameOverDialog, FinalStatusBadge } from './GameOverDialog';
 import { EmergencyDialog } from './EmergencyDialog';
+import { MentorWidget } from './MentorWidget';
 import { useArtStore } from '@/lib/game/presentation/artState';
+import dynamic from 'next/dynamic';
+import { RestaurantScreen } from './screens/RestaurantScreen';
+
+/* ------------------------- CODE SPLITTING (рекомендация №6) -------------------------
+ * Стартовый экран (RestaurantScreen) — статический импорт для мгновенного
+ * первого рендера; остальные экраны вкладок — next/dynamic (ssr: false,
+ * клиентские компоненты): каждый экран получает свой чанк и грузится при
+ * первом открытии вкладки. Обёртки собраны В module scope — компоненты не
+ * пересоздаются на каждом рендере GameShell.
+ * НЕ лени: визард (SetupWizard), GameOverDialog, EmergencyDialog — не экраны вкладок. */
+
+/** Компактный скелетон загрузки (~108px): пульсирующие прямоугольники в стиле
+ *  KpiCard/SectionCard — переключение экранов не «прыгает» по высоте. */
+function ScreenSkeleton() {
+  return (
+    <div className="space-y-3" role="status" aria-busy="true" aria-label="Экран загружается">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="h-14 rounded-xl bg-stone-200/80 animate-pulse" />
+        ))}
+      </div>
+      <div className="h-10 rounded-xl bg-stone-100 animate-pulse" />
+    </div>
+  );
+}
+
+const MenuScreen = dynamic(() => import('./screens/MenuScreen').then((m) => m.MenuScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const WarehouseScreen = dynamic(() => import('./screens/WarehouseScreen').then((m) => m.WarehouseScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const StaffScreen = dynamic(() => import('./screens/StaffScreen').then((m) => m.StaffScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const ScheduleScreen = dynamic(() => import('./screens/ScheduleScreen').then((m) => m.ScheduleScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const FinanceScreen = dynamic(() => import('./screens/FinanceScreen').then((m) => m.FinanceScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const AnalyticsScreen = dynamic(() => import('./screens/AnalyticsScreen').then((m) => m.AnalyticsScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const MarketingScreen = dynamic(() => import('./screens/MarketingScreen').then((m) => m.MarketingScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const ReviewsScreen = dynamic(() => import('./screens/ReviewsScreen').then((m) => m.ReviewsScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const EventsScreen = dynamic(() => import('./screens/EventsScreen').then((m) => m.EventsScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const LicensesScreen = dynamic(() => import('./screens/LicensesScreen').then((m) => m.LicensesScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const EquipmentScreen = dynamic(() => import('./screens/EquipmentScreen').then((m) => m.EquipmentScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const LoansScreen = dynamic(() => import('./screens/LoansScreen').then((m) => m.LoansScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const QuarterlyScreen = dynamic(() => import('./screens/QuarterlyScreen').then((m) => m.QuarterlyScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const AcademyScreen = dynamic(() => import('./screens/AcademyScreen').then((m) => m.AcademyScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const ArtManagerScreen = dynamic(() => import('./screens/ArtManagerScreen').then((m) => m.ArtManagerScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
+const SettingsScreen = dynamic(() => import('./screens/SettingsScreen').then((m) => m.SettingsScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
 
 const NAV: { group: string; items: { id: ScreenId; label: string; icon: typeof Utensils }[] }[] = [
   {
@@ -238,6 +312,9 @@ export function GameShell() {
           </div>
 
           <div className="flex-1" />
+
+          {/* Наставник: контекстная подсказка по живым KPI (рекомендация №2) */}
+          <MentorWidget />
 
           {/* Мини-виджеты */}
           <div className="hidden md:flex items-center gap-4 text-sm">

@@ -24,6 +24,7 @@ import { consumeForDish, maxPortions } from './inventory';
 import { chefMenuCutFactors } from './permanent';
 import { effectiveStaff, stationCapacity, waiterLoad, organizationFactor, averageFatigue } from './staff';
 import { estimatedCheck } from './demand';
+import { dishAge, dishFreshnessFactor } from './menufatigue';
 
 /* ============================= ОЧЕРЕДЬ И ПОСАДКА ============================= */
 
@@ -201,13 +202,16 @@ function generateOrders(
         continue;
       }
       // DishScore = BasePopularity × PriceFactor × Availability × Quality (ТЗ §10.4–10.6).
+      // v10 §14 (меню-усталость): × свежесть блюда — приевшиеся продаются
+      // хуже, новинки лучше (микс заказов; общий спрос категории не меняется).
       const elasticity =
         MENU_CATEGORIES[cat as Dish['category']].elasticity * diff.demandElasticity;
       const weights = dishesInCat.map((d) => {
         const price = restaurant.menu.prices[d.id] ?? d.recommendedPrice;
         const priceFactor = Math.pow(d.recommendedPrice / Math.max(1, price), elasticity);
         const available = maxPortions(restaurant.inventory, d) > 0 ? 1 : 0;
-        return Math.max(0, d.basePopularity * priceFactor * available * (d.baseQuality / 80));
+        const freshness = dishFreshnessFactor(dishAge(restaurant.menu, d.id));
+        return Math.max(0, d.basePopularity * priceFactor * available * (d.baseQuality / 80) * freshness);
       });
       const totalWeight = weights.reduce((s, w) => s + w, 0);
       if (totalWeight <= 0) {

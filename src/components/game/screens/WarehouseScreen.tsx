@@ -10,6 +10,7 @@ import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, KpiCard, EmptyState, money, moneyShort } from '../widgets';
 import { INGREDIENTS_MAP, INGREDIENT_CATEGORIES } from '@/lib/game/content/ingredients';
 import { dayIndex, HACCP, haccpStatus } from '@/lib/game/engine';
+import { INFLATION } from '@/lib/game/config/inflation.config';
 import { PROCUREMENT, PROC_LABELS, activeProcurement, procAutoCoverDays } from '@/lib/game/config/procurement.config';
 import type { ProcurementPolicyId } from '@/lib/game/types';
 import { Button } from '@/components/ui/button';
@@ -34,6 +35,7 @@ import {
   Package,
   AlertTriangle,
   ClipboardCheck,
+  TrendingUp,
 } from 'lucide-react';
 
 interface StockRow {
@@ -61,6 +63,8 @@ export function WarehouseScreen() {
   const pendingSwitch = restaurant.inventory.procurement?.pendingSwitch ?? null;
   const supplyErrorsWeek = restaurant.inventory.supplyErrorsWeek ?? 0;
   const coverTarget = procAutoCoverDays(policy);
+  // v10 §10: индекс инфляции закупок (цены в списке ниже — уже с ним).
+  const foodIdx = restaurant.finance.inflation?.foodIdx ?? 1;
 
   const nowIdx = (state.week - 1) * 7 + state.day;
   const lastWeek = state.history.weekStats[state.history.weekStats.length - 1];
@@ -121,12 +125,23 @@ export function WarehouseScreen() {
       <WarehouseVisualBlock />
 
       {/* KPI склада */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <KpiCard
           icon={Boxes}
           label="Стоимость склада"
           value={moneyShort(stockValue)}
           sub={`${rows.length} позиций (FIFO)`}
+        />
+        <KpiCard
+          icon={TrendingUp}
+          label="Инфляция закупок"
+          value={`+${Math.round((foodIdx - 1) * 100)}%`}
+          sub={
+            (restaurant.finance.inflation?.steps ?? 0) === 0
+              ? `индексация на закрытии квартала (~${Math.round(INFLATION.foodAnnual * 100)}%/год)`
+              : `${restaurant.finance.inflation!.steps} шаг(а) квартала · цены поставщиков выросли`
+          }
+          tone={foodIdx > 1.05 ? 'warn' : 'default'}
         />
         <KpiCard
           icon={Truck}
