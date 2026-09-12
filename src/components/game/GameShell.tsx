@@ -40,6 +40,7 @@ import {
   Gauge,
   Clock,
   ImageIcon,
+  GraduationCap,
 } from 'lucide-react';
 
 import { RestaurantScreen } from './screens/RestaurantScreen';
@@ -58,6 +59,7 @@ import { LoansScreen } from './screens/LoansScreen';
 import { QuarterlyScreen } from './screens/QuarterlyScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { ArtManagerScreen } from './screens/ArtManagerScreen';
+import { AcademyScreen } from './screens/AcademyScreen';
 import { GameOverDialog, FinalStatusBadge } from './GameOverDialog';
 import { EmergencyDialog } from './EmergencyDialog';
 import { useArtStore } from '@/lib/game/presentation/artState';
@@ -100,6 +102,7 @@ const NAV: { group: string; items: { id: ScreenId; label: string; icon: typeof U
     group: 'Отчёты',
     items: [
       { id: 'quarterly', label: 'Квартальный разбор', icon: ClipboardList },
+      { id: 'academy', label: 'Академия управляющего', icon: GraduationCap },
       { id: 'art', label: 'Иллюстрации', icon: ImageIcon },
       { id: 'settings', label: 'Настройки и сейвы', icon: Settings },
     ],
@@ -380,6 +383,7 @@ export function GameShell() {
               {screen === 'equipment' && <EquipmentScreen />}
               {screen === 'loans' && <LoansScreen />}
               {screen === 'quarterly' && <QuarterlyScreen />}
+              {screen === 'academy' && <AcademyScreen />}
               {screen === 'art' && <ArtManagerScreen />}
               {screen === 'settings' && <SettingsScreen />}
             </motion.div>

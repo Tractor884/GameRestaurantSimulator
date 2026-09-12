@@ -60,6 +60,7 @@ export type ScreenId =
   | 'equipment'
   | 'loans'
   | 'quarterly'
+  | 'academy'
   | 'art'
   | 'settings';
 

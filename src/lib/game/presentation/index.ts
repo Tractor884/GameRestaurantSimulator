@@ -64,6 +64,8 @@ export {
 } from './finance';
 
 export { getWarehouseVisualState, getWarehouseMood } from './warehouse';
+export { buildKpis, buildDebrief } from './academy';
+export type { KpiCardData, KpiStatus, DebriefIssue } from './academy';
 export {
   getTechnicianMood,
   getEquipmentVisualState,
