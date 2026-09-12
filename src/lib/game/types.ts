@@ -352,6 +352,9 @@ export interface Restaurant {
   licenses: LicenseState;
   risks: Record<RiskType, number>; // 0..100
   equipment: EquipmentState;
+  /** Санитарная система HACCP (v9): аудит → окно соответствия; запущенность
+   *  без аудита → санитарная цель выше. */
+  haccp?: HaccpState;
   cleanliness: number; // 0..100
   comfort: number; // 0..100
   atmosphere: number; // 0..100
@@ -366,6 +369,14 @@ export interface Restaurant {
   fatigueHighWeeks?: number;
   ratingHighWeeks?: number;
   leverageHighWeeks?: number;
+}
+
+/** Санитарная система HACCP (v9). */
+export interface HaccpState {
+  /** Абсолютный день последнего аудита. */
+  lastAuditDay: number;
+  /** Сколько аудитов проведено за игру (для статистики). */
+  audits: number;
 }
 
 /** Состояние отношений с арендодателем (БАЛ-v2 §6). */
@@ -398,6 +409,8 @@ export interface PermanentEffects {
   franchiseDemand?: number;
   /** «Франшиза» (согласие): доля выручки сети навсегда. */
   franchiseOwnerShare?: number;
+  /** «Доставка» (согласие): комиссия агрегатора — доля ВСЕЙ выручки навсегда. */
+  deliveryShare?: number;
   /** «Франшиза» (отказ): престиж +N к BSC «Клиенты». */
   prestigeBonus?: number;
   /** «Кризис» (поднять): оклады ×mult навсегда. */
@@ -822,6 +835,9 @@ export interface HistoryState {
   lowRatingWeeks: number; // подряд рейтинг < 2.0
   /** Переезды по ультиматуму арендодателя (спец-финал §20, v8). */
   relocations?: number;
+  /** История квартальных разборов (v9): переживает затирание weekResult
+   *  следующей неделей — экран «Квартальный разбор» показывает все. */
+  quarterlyReviews?: QuarterlyReview[];
 }
 
 export interface GameState {

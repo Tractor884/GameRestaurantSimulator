@@ -41,6 +41,7 @@ import { PROCUREMENT, PROC_LABELS } from '../config/procurement.config';
 import { DIVIDENDS } from '../config/dividends.config';
 import { LANDLORD } from '../config/landlord.config';
 import { EQUIPMENT_SERVICE } from '../config/equipmentService.config';
+import { HACCP } from '../config/haccp.config';
 import { deriveRng, hashSeed } from '../rng';
 import { initLandlordState, applyLandlordResolution } from './landlord';
 import { applyDividendDecision, applyOwnerForcePay, applyOwnerRefuse } from './dividends';
@@ -181,6 +182,9 @@ export function createGame(opts: SetupOptions): GameState {
     fatigueHighWeeks: 0,
     ratingHighWeeks: 0,
     leverageHighWeeks: 0,
+    // v9: санитарная система HACCP — открытие считается аудитом
+    // (окно соответствия 28 дн с первого дня, дальше — решения игрока).
+    haccp: { lastAuditDay: 0, audits: 0 },
     menu: { dishes: [...menuIds], prices, stopList: [], customDishes: [] },
     inventory: { batches: [], pendingOrders: [], procurement: { policy: 'standard', pendingSwitch: null }, supplyErrorsWeek: 0 },
     staff: { pools: defaultPools(), schedule: defaultSchedule() },
@@ -537,6 +541,31 @@ export function deepCleaning(state: GameState): ActionResult {
   return { ok: true, message: 'Генеральная уборка проведена: −15 санитарного риска' };
 }
 
+/** Аудит HACCP (v9): система санитарного контроля (критические точки —
+ *  приёмка поставок, температурные журналы, ротация запасов, гигиена
+ *  персонала). Дешевле генеральной уборки и работает «на систему»:
+ *  − 35 000 ₽ разово (лаборант + обучение журналам);
+ *  − санриск −6 сразу + окно соответствия 28 дн (цель санриска ×0,75);
+ *  − без аудита 56+ дней — обратный эффект (цель ×1,3: журналы брошены). */
+export function haccpAudit(state: GameState): ActionResult {
+  const r = state.restaurant!;
+  if (r.finance.cash < HACCP.auditCost) return { ok: false, message: 'Недостаточно денег на аудит' };
+  addTransaction(
+    r,
+    dateNow(state),
+    'maintenance',
+    HACCP.auditCost,
+    'out',
+    `Аудит HACCP №${(r.haccp?.audits ?? 0) + 1}: лаборант, журналы, обучение персонала`,
+  );
+  r.haccp = { lastAuditDay: dayIndex(dateNow(state)), audits: (r.haccp?.audits ?? 0) + 1 };
+  r.risks.sanitary = clamp(r.risks.sanitary - HACCP.riskDrop, 0, 100);
+  return {
+    ok: true,
+    message: `Аудит HACCP пройден: санриск −${HACCP.riskDrop}, окно соответствия ${HACCP.protectionDays} дн`,
+  };
+}
+
 export function buyAlcoholLicense(state: GameState): ActionResult {
   const r = state.restaurant!;
   if (r.licenses.alcohol?.active) return { ok: false, message: 'Лицензия уже активна' };
@@ -751,8 +780,10 @@ export function replyToReviews(state: GameState): ActionResult {
   );
   r.reputation.priorRating = Math.min(5, r.reputation.priorRating + priorGain);
   r.risks.legal = clamp(r.risks.legal - 8, 0, 100); // «проработали жалобы»
+  const n = Math.round(u);
+  const plural = n % 10 === 1 && n % 100 !== 11 ? 'отзыв' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'отзыва' : 'отзывов';
   return {
     ok: true,
-    message: `Отвечено на ${Math.round(u)} отзывов: конверсия восстановлена, приор рейтинга +${priorGain.toFixed(2)}`,
+    message: `Отвечено на ${n} ${plural}: конверсия восстановлена, приор рейтинга +${priorGain.toFixed(2)}`,
   };
 }

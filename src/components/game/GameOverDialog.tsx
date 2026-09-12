@@ -1,8 +1,12 @@
 /**
- * ФИНАЛЬНЫЙ ЭКРАН (ТЗ §37 + БАЛ-v2 §20): финальный РАНГ D−…A+ из 4 осей
- * (рейтинг × маржа × BSC × текучесть), спец-финалы («Кухня со звёздами»,
- * «Переезд», «Управленца сменили», причины банкротства), счёт игры по
- * 6 компонентам и динамические советы по слабым осям.
+ * ФИНАЛЬНЫЙ ЭКРАН (ТЗ §37 + БАЛ-v2 §20 + запрос пользователя v9):
+ * ЕДИНАЯ шкала 0–1000 (6 направлений: финансы/клиенты/операционка/
+ * персонал/рост/риски) и 10 уровней D−…A+ (полосы по 100 очков) +
+ * спец-финалы («Кухня со звёздами», «Переезд», «Управленца сменили»,
+ * причины банкротства) и динамические советы по слабым местам.
+ * Прежние ДВЕ оценки (ранг 0–100 из 4 осей + счёт 0–1000) и две категории
+ * («сильный/устойчивый ресторан») заменены одной шкалой и одним уровнем;
+ * статусы — фактическая строка итога (выполнены ли условия победы).
  *
  * Требование пользователя: окно НЕ закрывается само — пользователь сам решает,
  * когда закрыть (кнопка). После закрытия в топбаре остаётся кнопка «Результаты»,
@@ -21,7 +25,7 @@ import {
   RELOCATION_FINAL,
   BANKRUPT_REASONS,
   axisHints,
-  GRADE_AXIS_WEIGHTS,
+  scoreBandRange,
 } from '@/lib/game/engine';
 import { ScoreBar, money, moneyShort } from './widgets';
 import { Button } from '@/components/ui/button';
@@ -54,6 +58,7 @@ export function GameOverDialog() {
   const fs = state.weekResult?.finalScore;
   const grade = computeFinalGrade(state);
   const rankPres = RANK_PRESENTATION[grade.rank];
+  const band = scoreBandRange(grade.rank);
   const isWin = state.status !== 'bankrupt' && state.status !== 'stable' && state.status !== 'owner_replaced';
   const restaurant = state.restaurant!;
   const weeksLived = state.history.weekStats.length;
@@ -81,7 +86,7 @@ export function GameOverDialog() {
       <DialogContent
         className="sm:max-w-2xl max-h-[92vh] overflow-y-auto p-0 gap-0 overflow-x-hidden"
       >
-        {/* Шапка: РАНГ + вердикт + статус (DialogTitle внутри — требование доступности Radix) */}
+        {/* Шапка: ЕДИНАЯ шкала 0–1000 + уровень D−…A+ (DialogTitle внутри — требование доступности Radix) */}
         <DialogHeader className="p-0 space-y-0">
         <DialogTitle asChild>
         <div className={cn('rounded-t-lg px-6 py-6 text-white', headGradient)}>
@@ -105,15 +110,19 @@ export function GameOverDialog() {
                     : rankPres.title}
               </p>
               <p className="text-sm opacity-90 mt-0.5">
-                «{restaurant.name}» · {STATUS_LABELS[state.status]} · пройдено {weeksLived}{' '}
-                {weeksLived % 10 === 1 && weeksLived % 100 !== 11 ? 'неделя' : 'недель'}
+                «{restaurant.name}» · пройдено {weeksLived}{' '}
+                {weeksLived % 10 === 1 && weeksLived % 100 !== 11 ? 'неделя' : 'недель'} ·{' '}
+                {isWin ? 'условия победы выполнены' : 'итог см. в деталях'}
               </p>
             </div>
-            {/* Ранг A+…D− */}
+            {/* Единая оценка: X / 1000 + уровень */}
             <div className="ml-auto text-right shrink-0">
-              <p className={cn('text-5xl font-black leading-none', 'text-white drop-shadow')}>{rankPres.label}</p>
-              <p className="text-[10px] opacity-80 mt-1 uppercase tracking-wider">
-                ранг · {(grade.score * 100).toFixed(0)} / 100
+              <p className={cn('text-5xl font-black leading-none tabular-nums', 'text-white drop-shadow')}>
+                {grade.score1000}
+                <span className="text-2xl font-semibold opacity-80"> / 1000</span>
+              </p>
+              <p className="text-xs mt-1 uppercase tracking-wider font-semibold">
+                уровень {rankPres.label} · полоса {band.min}–{band.max}
               </p>
             </div>
           </div>
@@ -121,7 +130,7 @@ export function GameOverDialog() {
         </DialogTitle>
         <DialogDescription asChild>
           <span className="sr-only">
-            Финальный ранг {rankPres.label}. Счёт {fs?.total ?? '—'} из 1000. Статус:{' '}
+            Финальный счёт {grade.score1000} из 1000, уровень {rankPres.label} — {rankPres.title}. Итог:{' '}
             {STATUS_LABELS[state.status]}.
           </span>
         </DialogDescription>
@@ -189,43 +198,24 @@ export function GameOverDialog() {
             />
           </div>
 
-          {/* 4 оси ранга (рейтинг × маржа × BSC × текучесть) */}
+          {/* Диагностика итога: что стоит за уровнем (без второго счёта) */}
           <div>
             <p className="text-sm font-semibold text-stone-800 mb-3 flex items-center gap-2 flex-wrap">
-              Оси ранга {grade.rank}
+              Что стоит за уровнем {grade.rank}
               <span className="text-xs font-normal text-stone-400">
-                рейтинг 30% · маржа 25% · BSC 30% · текучесть 15%
+                диагноз по 4 направлениям — подсказки, не вторая оценка
               </span>
-              <Badge variant="secondary" className="bg-stone-100 text-stone-600 tabular-nums">
-                скор {(grade.score * 100).toFixed(0)}/100
-              </Badge>
             </p>
-            <div className="space-y-3.5">
-              <GradeAxisBar
-                label="Рейтинг гостей"
-                hint={`${grade.metrics.rating.toFixed(2)} ★ (анкеры 3,2–4,8)`}
-                value={grade.axes.rating}
-              />
-              <GradeAxisBar
-                label="Годовая маржа"
-                hint={`${grade.metrics.marginPct.toFixed(1)}% чистой (полная — 14%)`}
-                value={grade.axes.margin}
-              />
-              <GradeAxisBar
-                label="BSC квартала"
-                hint={`средний ${grade.metrics.bscAvg.toFixed(0)}/100 (35–85)`}
-                value={grade.axes.bsc}
-              />
-              <GradeAxisBar
-                label="Стабильность команды"
-                hint={`текучесть ~${grade.metrics.turnoverPct.toFixed(0)}% (≤15% — отлично)`}
-                value={grade.axes.turnover}
-              />
+            <div className="grid grid-cols-2 gap-2">
+              <GradeMetricChip label="Рейтинг гостей" value={`${grade.metrics.rating.toFixed(2)} ★`} good={grade.metrics.rating >= 4.2} />
+              <GradeMetricChip label="Годовая маржа" value={`${grade.metrics.marginPct.toFixed(1)}%`} good={grade.metrics.marginPct >= 10} />
+              <GradeMetricChip label="BSC квартала" value={`${grade.metrics.bscAvg.toFixed(0)}/100`} good={grade.metrics.bscAvg >= 60} />
+              <GradeMetricChip label="Текучесть ~" value={`${grade.metrics.turnoverPct.toFixed(0)}%`} good={grade.metrics.turnoverPct <= 20} />
             </div>
-            {/* Динамические советы по слабым осям */}
+            {/* Динамические советы по слабым местам */}
             {hints.length > 0 && (
               <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-1.5">
-                <p className="text-xs font-semibold text-amber-800">Куда расти (слабые оси)</p>
+                <p className="text-xs font-semibold text-amber-800">Куда расти (слабые направления)</p>
                 {hints.map((h) => (
                   <p key={h.axis} className="text-xs text-amber-900/90 flex gap-1.5">
                     <span className="font-semibold shrink-0">{h.axis}:</span>
@@ -236,15 +226,14 @@ export function GameOverDialog() {
             )}
           </div>
 
-          {/* Разбор счёта по 6 компонентам */}
+          {/* Разбор счёта по 6 компонентам — ЕДИНСТВЕННАЯ оценка игры */}
           {fs ? (
             <div>
-              <p className="text-sm font-semibold text-stone-800 mb-3 flex items-center gap-2">
-                Из чего сложился счёт
+              <p className="text-sm font-semibold text-stone-800 mb-3 flex items-center gap-2 flex-wrap">
+                Из чего сложился счёт {grade.score1000}/1000
                 <span className="text-xs font-normal text-stone-400">
-                  (6 направлений с весами итога)
+                  6 направлений — единственная итоговая шкала игры
                 </span>
-                <span className="ml-auto text-lg font-black tabular-nums text-stone-800">{fs.total}<span className="text-xs font-normal text-stone-400">/1000</span></span>
               </p>
               <div className="space-y-3.5">
                 <FinalScoreBar
@@ -291,26 +280,23 @@ export function GameOverDialog() {
             </p>
           )}
 
-          {/* Легенда статусов */}
+          {/* Как читать итог: одна шкала — 10 уровней */}
           <div className="rounded-lg border border-stone-200 bg-stone-50 p-3.5 text-xs text-stone-600 space-y-1.5">
-            <p className="font-semibold text-stone-700 text-sm">Что означают статусы</p>
+            <p className="font-semibold text-stone-700 text-sm">Как читать итог</p>
             <p>
-              <b>Устойчивый ресторан</b> — все условия победы выполнены: деньги, рейтинг, прибыль и
-              BSC квартала выше целей.
+              <b>Счёт 0–1000 — единственная оценка</b>: сумма 6 направлений (финансы 250, клиенты 200,
+              операционка 200, команда 150, рост 100, риски 100). Уровень — полоса по 100 очков:
+              D−…D+ до 299, C−…C+ 300–599, B/B+ 600–799, A/A+ 800+. Сегодня — {rankPres.label}{' '}
+              ({band.min}–{band.max}):
+              {isWin
+                ? ' все условия победы этой сложности выполнены.'
+                : state.status === 'bankrupt'
+                  ? ' ресторан закрылся до конца года — счёт честно считается по прожитым неделям.'
+                  : ' до конца года дожили, но часть целевых метрик не дотянула.'}
             </p>
             <p>
-              <b>Отличный ресторан</b> — то же + выдающийся BSC и рейтинг 4.5: редкий результат.
-            </p>
-            <p>
-              <b>Стабильный</b> — вы дожили до 52 недель, но часть целевых метрик не дотянула.
-            </p>
-            <p>
-              <b>Банкротство</b> — деньги кончились (или рейтинг/долги добили). Попробуйте снова:
-              ранние недели решают многое.
-            </p>
-            <p>
-              <b>Управленца сменили</b> — доверие владельца упало ниже 15: неплаченные дивиденды и
-              споры о развитии стоили должности.
+              <b>«Отличный ресторан»</b> в деталях — то же самое подножие A/A+ с выдающимся BSC и рейтингом 4.5+.
+              Статусы («устойчивый», «стабильный») — только фактическая строка итога, категория всегда одна: уровень.
             </p>
           </div>
 
@@ -383,30 +369,14 @@ function SpecialFinalCard({
   );
 }
 
-/** Полоса оси ранга 0..1 (двухцветная подсветка слабых зон). */
-function GradeAxisBar({ label, hint, value }: { label: string; hint: string; value: number }) {
-  const pctValue = Math.round(value * 100);
-  const color =
-    value >= 0.6 ? 'bg-emerald-500' : value >= 0.35 ? 'bg-amber-500' : 'bg-red-400';
+/** Компактная метрика диагностики (значение + норма, без второй оценки). */
+function GradeMetricChip({ label, value, good }: { label: string; value: string; good: boolean }) {
   return (
-    <div>
-      <div className="flex items-baseline justify-between text-xs mb-1">
-        <span className="text-stone-700 font-medium">
-          {label}
-          <span className="text-stone-400 font-normal"> — {hint}</span>
-        </span>
-        <span className="font-semibold tabular-nums text-stone-800">{pctValue}%</span>
-      </div>
-      <div
-        className="h-2 w-full rounded-full bg-stone-100 overflow-hidden"
-        role="progressbar"
-        aria-label={label}
-        aria-valuenow={pctValue}
-        aria-valuemin={0}
-        aria-valuemax={100}
-      >
-        <div className={cn('h-full rounded-full transition-all', color)} style={{ width: `${pctValue}%` }} />
-      </div>
+    <div className="flex items-center justify-between gap-2 rounded-lg border border-stone-200 bg-white px-3 py-2">
+      <span className="text-xs text-stone-500 truncate">{label}</span>
+      <span className={cn('text-sm font-bold tabular-nums shrink-0', good ? 'text-emerald-700' : 'text-amber-700')}>
+        {value}
+      </span>
     </div>
   );
 }
@@ -466,12 +436,11 @@ function FinalScoreBar({
   );
 }
 
-/** Бейдж финального статуса для топбара. */
+/** Бейдж финального результата для топбара: единая шкала + уровень. */
 export function FinalStatusBadge() {
   const state = useGame((s) => s.state);
   const showFinal = useGame((s) => s.showFinal);
   if (!state || state.phase !== 'gameover') return null;
-  const fs = state.weekResult?.finalScore;
   const grade = computeFinalGrade(state);
   return (
     <button
@@ -480,9 +449,8 @@ export function FinalStatusBadge() {
       aria-label="Открыть экран результатов"
     >
       <Trophy className="h-3.5 w-3.5 text-amber-400" aria-hidden />
-      {STATUS_LABELS[state.status]}
-      <span className="tabular-nums">· ранг {grade.rank}</span>
-      {fs != null && <span className="tabular-nums">· {fs.total}/1000</span>}
+      {grade.score1000}/1000
+      <span className="tabular-nums">· уровень {grade.rank}</span>
       <span className="opacity-70">· Результаты</span>
     </button>
   );

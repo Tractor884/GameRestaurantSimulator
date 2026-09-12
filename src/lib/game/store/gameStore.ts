@@ -29,6 +29,7 @@ import {
   repairEquipment,
   serviceEquipment,
   deepCleaning,
+  haccpAudit as haccpAuditAction,
   buyAlcoholLicense,
   repayLoan,
   resolveEvent,
@@ -125,6 +126,8 @@ interface GameStore {
   /** Профилактика оборудования (v8): ТО зоны — дешевле ремонта, окно защиты. */
   equipmentService(zone: 'kitchen' | 'coffee' | 'hall'): void;
   deepClean(): void;
+  /** Санитарная система HACCP (v9): аудит критических точек. */
+  haccpAudit(): void;
   /** Благосостояние (v6): премия всему штату. */
   bonus(): void;
   /** Благосостояние (v6): тренинг роли. */
@@ -336,6 +339,7 @@ export const useGame = create<GameStore>((set, get) => ({
   equipmentRepair: (zone) => get().apply((st) => repairEquipment(st, zone)),
   equipmentService: (zone) => get().apply((st) => serviceEquipment(st, zone)),
   deepClean: () => get().apply((st) => deepCleaning(st)),
+  haccpAudit: () => get().apply((st) => haccpAuditAction(st)),
   bonus: () => get().apply((st) => payBonus(st)),
   training: (roleId) => get().apply((st) => trainRole(st, roleId)),
   insuranceSet: (enabled) => get().apply((st) => setInsurance(st, enabled)),
@@ -448,7 +452,10 @@ export const useGame = create<GameStore>((set, get) => ({
  *  (§8) и роль «секретарь» (админ-роль, стартует не нанятой).
  *  v8: порт БАЛ-v2 из ветки v1.0.0 — цепочка арендодателя (§6), дивиденды
  *  и доверие владельца (§13), дилеммы (§15), финальные ранги (§20) и
- *  профилактика оборудования (запрос пользователя). */
+ *  профилактика оборудования (запрос пользователя).
+ *  v9: квартальные разборы — в историю (не затираются следующей неделей),
+ *  HACCP — санитарная система (миграция = день «аудита», без штрафа),
+ *  рутина дилемм и комиссия доставки в перманентных эффектах. */
 function migrateState(state: GameState): void {
   const r = state.restaurant;
   // v4: настройки геймплея.
@@ -506,6 +513,14 @@ function migrateState(state: GameState): void {
     }
   }
   if (state.history.relocations == null) state.history.relocations = 0;
+  // v9: история квартальных разборов (экран читает её целиком).
+  if (state.history.quarterlyReviews == null) state.history.quarterlyReviews = [];
+  // v9: HACCP — старые сейвы без системы не получают штраф запущенности
+  // (день «аудита» = день миграции).
+  if (r && r.haccp == null) {
+    const absDayV9 = (state.week - 1) * 7 + state.day;
+    r.haccp = { lastAuditDay: absDayV9, audits: 0 };
+  }
   if (r) {
     // v4: кастомные блюда (CSV-импорт новых блюд §35.3–35.4).
     if (!r.menu.customDishes) r.menu.customDishes = [];

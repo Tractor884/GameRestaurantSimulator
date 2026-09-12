@@ -26,6 +26,7 @@ export {
   repairEquipment,
   serviceEquipment,
   deepCleaning,
+  haccpAudit,
   buyAlcoholLicense,
   repayLoan,
   resolveEvent,
@@ -66,9 +67,12 @@ export {
   breakMult as serviceBreakMult,
   type ServiceStatus,
 } from '../config/equipmentService.config';
+export { HACCP, haccpStatus, type HaccpStatus } from '../config/haccp.config';
 export { currentRentMonthly, rentIndexationInfo } from './landlord';
 export {
   computeFinalGrade,
+  scoreLevel,
+  scoreBandRange,
   RANK_PRESENTATION,
   STARS_FINAL,
   OWNER_REPLACED_FINAL,

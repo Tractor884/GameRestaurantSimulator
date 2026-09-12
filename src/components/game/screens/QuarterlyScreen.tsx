@@ -1,24 +1,40 @@
 /**
- * Экран «Квартальный разбор» (ТЗ §28): итоги квартала по BSC
- * и финальный счёт при завершении игры.
+ * Экран «Квартальный разбор» (ТЗ §28): итоги кварталов по BSC и финальный
+ * счёт при завершении игры.
+ *
+ * v9: разборы живут в ИСТОРИИ (history.quarterlyReviews) — раньше разбор
+ * лежал только в weekResult закрывающей недели и ЗАТИРАЛСЯ следующей,
+ * из-за чего во вкладке почти всегда было пусто. Теперь: последний разбор
+ * — крупной карточкой, история кварталов — компактной лентой.
  */
 'use client';
 
 import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, ScoreBar, MetricRow, EmptyState, money, moneyShort } from '../widgets';
 import { FINAL_SCORE_WEIGHTS, QUARTERLY_WEEKS } from '@/lib/game/config/bsc.config';
-import { STATUS_LABELS, difficultyWin, difficultyOf } from '@/lib/game/config/difficulty.config';
+import { difficultyWin, difficultyOf } from '@/lib/game/config/difficulty.config';
+import {
+  RANK_PRESENTATION,
+  scoreLevel,
+  scoreBandRange,
+} from '@/lib/game/engine';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { ClipboardList, Trophy, Lightbulb, Target, CalendarClock } from 'lucide-react';
-import type { FinalScore } from '@/lib/game/types';
+import { ClipboardList, Trophy, Lightbulb, Target, CalendarClock, History } from 'lucide-react';
+import type { FinalScore, QuarterlyReview } from '@/lib/game/types';
 
 export function QuarterlyScreen() {
   const state = useGame((s) => s.state)!;
   const win = difficultyWin(state.difficultyId);
   const diff = difficultyOf(state.difficultyId);
 
-  const review = state.weekResult?.quarterlyReview ?? null;
+  // v9: разборы из истории (переживают затирание weekResult); свежий
+  // разбор текущей недели может ещё не быть в истории — берём оба.
+  const history = state.history.quarterlyReviews ?? [];
+  const fromWeekResult = state.weekResult?.quarterlyReview ?? null;
+  const all = history.length > 0 ? history : fromWeekResult ? [fromWeekResult] : [];
+  const latest = all.length > 0 ? all[all.length - 1] : null;
+
   const finalScore = state.phase === 'gameover' ? (state.weekResult?.finalScore ?? null) : null;
 
   // Граница следующего квартала (кратна 12).
@@ -26,23 +42,23 @@ export function QuarterlyScreen() {
 
   return (
     <div className="space-y-4">
-      {/* Квартальный разбор */}
-      {review ? (
+      {/* Квартальный разбор: последний */}
+      {latest ? (
         <SectionCard
-          title={`Квартальный разбор — квартал ${review.quarter}`}
+          title={`Квартальный разбор — квартал ${latest.quarter}`}
           icon={ClipboardList}
           right={
             <Badge
               className={cn(
                 'text-white hover:text-white',
-                review.bscAvg >= 70
+                latest.bscAvg >= 70
                   ? 'bg-emerald-600 hover:bg-emerald-600'
-                  : review.bscAvg >= 50
+                  : latest.bscAvg >= 50
                     ? 'bg-amber-600 hover:bg-amber-600'
                     : 'bg-red-600 hover:bg-red-600',
               )}
             >
-              BSC {review.bscAvg.toFixed(0)}
+              BSC {latest.bscAvg.toFixed(0)}
             </Badge>
           }
         >
@@ -50,20 +66,20 @@ export function QuarterlyScreen() {
             <div>
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 mb-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Вердикт</p>
-                <p className="text-sm font-medium text-stone-800 mt-1">{review.verdict}</p>
+                <p className="text-sm font-medium text-stone-800 mt-1">{latest.verdict}</p>
               </div>
-              <ScoreBar label="Средний BSC квартала" value={review.bscAvg} />
+              <ScoreBar label="Средний BSC квартала" value={latest.bscAvg} />
               <div className="mt-3">
-                <MetricRow label="Выручка за квартал" value={moneyShort(review.revenue)} />
+                <MetricRow label="Выручка за квартал" value={moneyShort(latest.revenue)} />
                 <MetricRow
                   label="Чистая прибыль"
-                  value={money(review.netProfit)}
-                  tone={review.netProfit >= 0 ? 'good' : 'bad'}
+                  value={money(latest.netProfit)}
+                  tone={latest.netProfit >= 0 ? 'good' : 'bad'}
                 />
                 <MetricRow
                   label="Рейтинг"
-                  value={review.rating.toFixed(2)}
-                  tone={review.rating >= 4.0 ? 'good' : 'bad'}
+                  value={latest.rating.toFixed(2)}
+                  tone={latest.rating >= 4.0 ? 'good' : 'bad'}
                 />
               </div>
             </div>
@@ -73,7 +89,7 @@ export function QuarterlyScreen() {
                 Рекомендации
               </p>
               <ol className="space-y-2">
-                {review.recommendations.map((rec, i) => (
+                {latest.recommendations.map((rec, i) => (
                   <li
                     key={i}
                     className="flex items-start gap-2 rounded-lg border border-stone-200 p-2.5 text-sm text-stone-700"
@@ -86,7 +102,7 @@ export function QuarterlyScreen() {
                 ))}
               </ol>
               <p className="text-xs text-stone-400 mt-3">
-                Следующий разбор — в конце недели, кратной {QUARTERLY_WEEKS}.
+                Следующий разбор — в конце недели {nextQuarterWeek} (каждые {QUARTERLY_WEEKS} недель).
               </p>
             </div>
           </div>
@@ -102,9 +118,20 @@ export function QuarterlyScreen() {
         </SectionCard>
       )}
 
+      {/* История кварталов (v9): лента всех разборов года */}
+      {all.length > 1 && (
+        <SectionCard title="История кварталов" icon={History}>
+          <div className="max-h-64 overflow-y-auto pr-1 space-y-1.5">
+            {[...all].reverse().map((q) => (
+              <QuarterHistoryRow key={q.quarter} q={q} current={q === latest} />
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
       {/* Финальный счёт */}
       {finalScore ? (
-        <FinalScoreCard score={finalScore} statusLabel={STATUS_LABELS[state.status]} />
+        <FinalScoreCard score={finalScore} />
       ) : (
         <SectionCard title="Финальный счёт" icon={Trophy}>
           <div className="flex items-start gap-3">
@@ -120,6 +147,9 @@ export function QuarterlyScreen() {
                 {moneyShort(win.minCumulativeProfit)}, денег на счёте ≥ {moneyShort(win.minCash)} и{' '}
                 {win.minPositiveOpWeeks} недель положительной операционной прибыли подряд.
               </p>
+              <p className="text-xs text-stone-500">
+                Итог года — единый счёт 0–1000 и уровень D−…A+ (10 уровней, полосы по 100 очков).
+              </p>
             </div>
           </div>
         </SectionCard>
@@ -128,8 +158,42 @@ export function QuarterlyScreen() {
   );
 }
 
-/** Карточка финального счёта. */
-function FinalScoreCard({ score, statusLabel }: { score: FinalScore; statusLabel: string }) {
+/** Строка истории квартала. */
+function QuarterHistoryRow({ q, current }: { q: QuarterlyReview; current: boolean }) {
+  return (
+    <div
+      className={cn(
+        'flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-2 text-sm',
+        current ? 'border-amber-300 bg-amber-50' : 'border-stone-200 bg-white',
+      )}
+    >
+      <span className="font-semibold text-stone-700 shrink-0">Кв. {q.quarter}</span>
+      <Badge
+        variant="secondary"
+        className={cn(
+          'shrink-0',
+          q.bscAvg >= 70
+            ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100'
+            : q.bscAvg >= 50
+              ? 'bg-amber-100 text-amber-800 hover:bg-amber-100'
+              : 'bg-red-100 text-red-800 hover:bg-red-100',
+        )}
+      >
+        BSC {q.bscAvg}
+      </Badge>
+      <span className="text-xs text-stone-500 tabular-nums">
+        выручка {moneyShort(q.revenue)} · прибыль {moneyShort(q.netProfit)} · рейтинг {q.rating.toFixed(2)}
+      </span>
+      <span className="ml-auto text-xs text-stone-600 truncate">{q.verdict}</span>
+    </div>
+  );
+}
+
+/** Карточка финального счёта: единая шкала 0–1000 + уровень (v9). */
+function FinalScoreCard({ score }: { score: FinalScore }) {
+  const level = scoreLevel(score.total);
+  const pres = RANK_PRESENTATION[level];
+  const band = scoreBandRange(level);
   const components: { key: keyof FinalScore; label: string }[] = [
     { key: 'financialHealth', label: 'Финансовое здоровье' },
     { key: 'customerHealth', label: 'Здоровье клиентской базы' },
@@ -175,7 +239,7 @@ function FinalScoreCard({ score, statusLabel }: { score: FinalScore; statusLabel
                   : 'bg-red-600 hover:bg-red-600',
             )}
           >
-            {statusLabel}
+            {pres.label} · {pres.title} ({band.min}–{band.max})
           </Badge>
         </div>
       </div>

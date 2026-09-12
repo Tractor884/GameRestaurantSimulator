@@ -25,6 +25,7 @@ import { MARKETING_CHANNELS_MAP } from '../config/marketing.config';
 import { RISK_LIMITS } from '../config/risks.config';
 import { SECRETARY_EFFECTS } from '../config/staffRoles.config';
 import { serviceStatus, wearMult, breakMult } from '../config/equipmentService.config';
+import { haccpStatus, haccpTargetMult } from '../config/haccp.config';
 import { eventFineMult } from './permanent';
 import type { Rng } from '../rng';
 import { clamp, dayIndex, addTransaction } from './core';
@@ -56,9 +57,16 @@ export function generateReviews(
     let count = Math.floor(expected);
     if (rng.chance(expected - count)) count++;
     for (let i = 0; i < count; i++) {
+      // Реализм (v9): часть отзывов — «личный казус» гостя (перепутали
+      // блюдо, ждали дольше соседей, не сошлись вкусы) — низкая оценка
+      // независимо от средней удовлетворённости. Даже отличные рестораны
+      // получают негатив: работа с ним — рутина управляющего, а не экзотика.
+      const badLuck = rng.chance(REPUTATION_CONFIG.badLuckShare);
       const noise = rng.float(-REPUTATION_CONFIG.reviewNoise, REPUTATION_CONFIG.reviewNoise);
-      const score = clamp(satisfaction / 20 + noise, 1, 5);
-      const scandal = satisfaction < 45 && rng.chance(0.06);
+      const score = badLuck
+        ? clamp(rng.float(2, REPUTATION_CONFIG.badLuckTop), 1, 5)
+        : clamp(satisfaction / 20 + noise, 1, 5);
+      const scandal = !badLuck && satisfaction < 45 && rng.chance(0.06);
       const srcIdx = rng.int(0, REVIEW_SOURCES.length);
       const sourceId = REVIEW_SOURCES[Math.abs(srcIdx) % REVIEW_SOURCES.length].id as ReviewSourceId;
       const template = pickReviewTemplate(score, rng.int(0, 64));
@@ -247,12 +255,18 @@ export function updateRisks(
   // санриск до зон срабатывания проверок/отравлений, а не только списывать
   // деньги; замер сценария D: риск 9.9 при порче 14.5% выручки), риск
   // тянется к ней со скоростью 0.25/день.
+  // HACCP (v9): аудит держит систему в дисциплине (цель ×0,75 в окне
+  // соответствия), запущенность без аудита (>56 дн) — цель ×1,3.
   {
+    const haccpMult = ctx.date
+      ? haccpTargetMult(haccpStatus(restaurant.haccp?.lastAuditDay, dayIndex(ctx.date)))
+      : 1;
     const sanTarget = clamp(
-      8 +
+      (8 +
         Math.min(ctx.expiredCount, 10) * 2.5 +
         Math.min(ctx.nearExpiryCount, 15) * 1.6 +
-        Math.max(0, 60 - restaurant.cleanliness) * 1.1,
+        Math.max(0, 60 - restaurant.cleanliness) * 1.1) *
+        haccpMult,
       0,
       100,
     );

@@ -63,6 +63,13 @@ export function franchiseRoyalty(revenue: number, restaurant: Restaurant): numbe
   return Math.round(revenue * share);
 }
 
+/** «Доставка» (v9): комиссия агрегатора — доля всей выручки недели, ₽. */
+export function deliveryRoyalty(revenue: number, restaurant: Restaurant): number {
+  const share = restaurant.permanentEffects?.deliveryShare;
+  if (!share || share <= 0) return 0;
+  return Math.round(revenue * share);
+}
+
 /**
  * Кредитное плечо для триггера «Реструктуризация»: NetDebt/активы.
  * Активы = касса + остаточная стоимость оборудования + склад.

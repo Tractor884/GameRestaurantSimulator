@@ -1,5 +1,5 @@
 /* Headless-тест движка: 6 недель по дням (кнопка «День»), проверки багов. */
-import { createGame, simulateDay, simulateWeek } from '../src/lib/game/engine';
+import { createGame, simulateDay, simulateWeek, resolveEvent } from '../src/lib/game/engine';
 import type { GameState } from '../src/lib/game/types';
 
 const opts = {
@@ -30,6 +30,11 @@ for (let i = 0; i < 42; i++) {
   const before = state.week;
   const { state: next } = simulateDay(state, { plannedActions: [] }, state.seed);
   state = next;
+  // v9: дилеммы/системные события приходят и в здоровой игре — бенчмарк
+  // должен их проживать (пассивный игрок берёт первый вариант).
+  for (const e of state.activeEvents.filter((x) => !x.resolved)) {
+    resolveEvent(state, e.id, 0);
+  }
   if (state.week > before) weeksClosed++;
   const avgF = Object.values(state.restaurant!.staff.pools)
     .filter((p) => p.count > 0)
@@ -61,6 +66,9 @@ console.log('риски:', JSON.stringify(Object.fromEntries(Object.entries(stat
 for (let i = 0; i < 4; i++) {
   const r = simulateWeek(state, state.seed);
   state = r.state;
+  for (const e of state.activeEvents.filter((x) => !x.resolved)) {
+    resolveEvent(state, e.id, 0);
+  }
 }
 console.log('\n=== ПОСЛЕ 4 НЕДЕЛЬ ЧЕРЕЗ КНОПКУ «НЕДЕЛЯ» ===');
 console.log('риск репутации:', state.restaurant!.risks.reputation.toFixed(1), '(должен снижаться при хорошем сервисе)');

@@ -17,8 +17,6 @@ import { clamp } from './core';
 import { averageFatigue } from './staff';
 import { leverageOf } from './permanent';
 
-const QUARTER_WEEKS = 12;
-
 /* ============================= ТРИГГЕРЫ ============================= */
 
 interface DilemmaCandidate {
@@ -31,15 +29,18 @@ interface DilemmaCandidate {
  * Проверка триггеров дилемм на закрытии недели. Возвращает событие-дилемму
  * ИЛИ null. Побочно обновляет окна (fatigueHighWeeks/ratingHighWeeks/
  * leverageHighWeeks) и замещает одно обычное событие недели.
+ *
+ * v9: приоритет — кризисные триггеры → «Франшиза» → РУТИННАЯ дилемма
+ * (бытовая развилка менеджера для здоровой игры, раз в ~10 нед).
  */
 export function checkDilemmas(state: GameState, week: number, weekDate: GameDate): GameEvent | null {
   const restaurant = state.restaurant;
   if (!restaurant) return null;
   if (DILEMMAS.perQuarter <= 0) return null;
-  // Не чаще одной в квартал (12 нед). lastDilemmaWeek = 0 — дилемм ещё не
-  // было: первое окно доступно сразу.
+  // Минимальный разрыв между ЛЮБЫМИ дилеммами (v9 — 10 нед): рутина
+  // приходит и в здоровой игре, кризисные — как раньше, чуть чаще квартала.
   const last = restaurant.lastDilemmaWeek ?? 0;
-  if (last > 0 && week - last < QUARTER_WEEKS) return null;
+  if (last > 0 && week - last < DILEMMAS.routineMinGap) return null;
   // Дилемма уже висит неразрешённой — не дублируем.
   if (state.activeEvents.some((e) => e.templateId.startsWith('dilemma_') && !e.resolved)) return null;
 
@@ -73,19 +74,41 @@ export function checkDilemmas(state: GameState, week: number, weekDate: GameDate
     candidates.push({ templateId: 'dilemma_staff_crisis', pressure: (turnover - DILEMMAS.turnover) * 100 });
   }
   // «Франшиза» — позитивный триггер: только если остальных нет.
+  let franchiseOk = false;
   if (
     candidates.length === 0 &&
     (restaurant.ratingHighWeeks ?? 0) >= DILEMMAS.ratingWeeks &&
     restaurant.reputation.rating > DILEMMAS.rating
   ) {
-    candidates.push({ templateId: 'dilemma_franchise', pressure: 1 });
+    franchiseOk = true;
   }
-  if (candidates.length === 0) return null;
 
-  candidates.sort((a, b) => b.pressure - a.pressure);
-  const top = candidates[0];
+  // РУТИННАЯ дилемма (v9): здоровая игра тоже должна видеть развилки.
+  // Выбор — ротация по календарю (детерминировано, без ГСЧ), из доступных:
+  // индексация доступна до потолка ×wageIndexCap, доставка — один раз.
+  let routinePool: string[] = [];
+  if (candidates.length === 0 && !franchiseOk && week >= DILEMMAS.routineStartWeek) {
+    if ((restaurant.permanentEffects?.wageRaise ?? 1) < DILEMMAS.wageIndexCap) {
+      routinePool.push('dilemma_wage_index');
+    }
+    if (restaurant.permanentEffects?.deliveryShare == null) {
+      routinePool.push('dilemma_delivery_app');
+    }
+  }
 
-  const event = createDilemmaEvent(top.templateId, week, weekDate, restaurant);
+  let templateId: string;
+  if (candidates.length > 0) {
+    candidates.sort((a, b) => b.pressure - a.pressure);
+    templateId = candidates[0].templateId;
+  } else if (franchiseOk) {
+    templateId = 'dilemma_franchise';
+  } else if (routinePool.length > 0) {
+    templateId = routinePool[Math.floor(week / DILEMMAS.routineMinGap) % routinePool.length];
+  } else {
+    return null;
+  }
+
+  const event = createDilemmaEvent(templateId, week, weekDate, restaurant);
   if (!event) return null;
 
   // Замещение: убираем одно обычное НЕразрешённое событие этой же недели
@@ -244,6 +267,58 @@ function createDilemmaEvent(
       ];
       break;
     }
+    case 'dilemma_wage_index': {
+      const payrollWeekly = Math.round(
+        ROLE_IDS.reduce(
+          (s, roleId) =>
+            s +
+            (restaurant.staff.pools[roleId]?.count ?? 0) *
+              (STAFF_ROLES[roleId].monthlySalary / 4.33),
+          0,
+        ),
+      );
+      base.title = 'Команда просит индексацию зарплат';
+      base.description =
+        'Старшая смена озвучила просьбу коллектива: «Продукты и проезд подорожали, оклады не трогали с ' +
+        'открытия. Просим индексацию 8% — иначе люди начнут смотреть по сторонам». Инфляция съедает ' +
+        'реальные зарплаты — и рыночный кадровый рынок это знает.';
+      base.resolutions = [
+        {
+          label: 'Индексировать оклады на 8%',
+          cost: 0,
+          note: `ФОТ +${Math.round(payrollWeekly * (d.wageIndexMult - 1)).toLocaleString('ru-RU')} ₽/нед — навсегда (потолок индексаций ×${d.wageIndexCap}). Мораль команды +${d.wageIndexMorale}.`,
+          dilemma: 'wage_accept',
+        },
+        {
+          label: 'Отказать: оклады остаются',
+          cost: 0,
+          note: `Экономия сегодня — счёт завтра: мораль −${d.wageRefuseMoraleHit}, риск увольнений ×${d.wageRefuseQuitMult} на ${d.wageRefuseQuitWeeks} нед.`,
+          dilemma: 'wage_refuse',
+        },
+      ];
+      break;
+    }
+    case 'dilemma_delivery_app': {
+      base.title = 'Агрегатор доставки зовёт на площадку';
+      base.description =
+        'Менеджер платформы доставки: «Подключайте ресторан: заказы из квартир и офисов рядом, готовите в ' +
+        'том же цеху. Комиссия — как у всех площадок». Кухня получит вечерний поток без единого гостя в зале.';
+      base.resolutions = [
+        {
+          label: 'Подписать договор с площадкой',
+          cost: 0,
+          note: `Спрос +${Math.round((d.deliveryDemandMult - 1) * 100)}% навсегда. Комиссия ${Math.round(d.deliveryShare * 100)}% всей выручки — каждую неделю, навсегда. Считайте экономику ДО подписи.`,
+          dilemma: 'delivery_accept',
+        },
+        {
+          label: 'Остаться офлайн-рестораном',
+          cost: 0,
+          note: `Репутация места, куда приходят лично: престиж +${d.deliveryPrestige} к перспективе «Клиенты» BSC.`,
+          dilemma: 'delivery_refuse',
+        },
+      ];
+      break;
+    }
     default:
       return null;
   }
@@ -334,6 +409,35 @@ export function applyDilemmaResolution(
         pool.morale = clamp(pool.morale - d.crisisMoraleHit, 0, 100);
       }
       return `Держимся: усталость растёт быстрее (×${d.crisisQFatigueMult}), найм ×${d.crisisHireMult} на ${d.crisisHireWeeks} нед, мораль −${d.crisisMoraleHit}.`;
+    }
+    /* ===== РУТИННЫЕ ДИЛЕММЫ (v9) ===== */
+    case 'wage_accept': {
+      const next = Math.min(d.wageIndexCap, (pe.wageRaise ?? 1) * d.wageIndexMult);
+      pe.wageRaise = Math.round(next * 1000) / 1000;
+      for (const pool of Object.values(r.staff.pools)) {
+        if (pool.count > 0) pool.morale = clamp(pool.morale + d.wageIndexMorale, 0, 100);
+      }
+      return `Оклады проиндексированы (×${next.toFixed(2)}): ФОТ вырос навсегда, мораль +${d.wageIndexMorale}.`;
+    }
+    case 'wage_refuse': {
+      for (const pool of Object.values(r.staff.pools)) {
+        if (pool.count > 0) pool.morale = clamp(pool.morale - d.wageRefuseMoraleHit, 0, 100);
+      }
+      const prev = pe.chefQuitRisk;
+      pe.chefQuitRisk = {
+        mult: Math.max(prev?.mult ?? 1, d.wageRefuseQuitMult),
+        untilWeek: Math.max(prev?.untilWeek ?? 0, week + d.wageRefuseQuitWeeks),
+      };
+      return `Без индексации: мораль −${d.wageRefuseMoraleHit}, увольнения ×${d.wageRefuseQuitMult} на ${d.wageRefuseQuitWeeks} нед.`;
+    }
+    case 'delivery_accept': {
+      pe.franchiseDemand = Math.round((pe.franchiseDemand ?? 1) * d.deliveryDemandMult * 1000) / 1000;
+      pe.deliveryShare = Math.round(((pe.deliveryShare ?? 0) + d.deliveryShare) * 1000) / 1000;
+      return `Доставка подключена: спрос +${Math.round((d.deliveryDemandMult - 1) * 100)}%, комиссия ${Math.round(d.deliveryShare * 100)}% выручки каждую неделю.`;
+    }
+    case 'delivery_refuse': {
+      pe.prestigeBonus = (pe.prestigeBonus ?? 0) + d.deliveryPrestige;
+      return `Офлайн-ресторан: престиж +${d.deliveryPrestige} к BSC «Клиенты».`;
     }
     default:
       return 'Дилемма решена.';

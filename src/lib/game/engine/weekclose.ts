@@ -45,7 +45,7 @@ import { DIVIDENDS, dividendProposal } from '../config/dividends.config';
 import { checkLandlordSchedule, currentRentMonthly } from './landlord';
 import { createOwnerDividendEvent, createOwnerTalkEvent, ownerReplaced } from './dividends';
 import { checkDilemmas, checkBribeScandal, checkChefQuit } from './dilemmas';
-import { franchiseRoyalty, leverageOf } from './permanent';
+import { franchiseRoyalty, deliveryRoyalty, leverageOf } from './permanent';
 
 export function closeWeek(state: GameState, seed: number): WeekSimulationResult {
   const draft = state; // мутируем переданный клон
@@ -228,6 +228,9 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
         bscAvg >= 75 ? 'Отличный квартал' : bscAvg >= 55 ? 'Стабильный квартал' : 'Квартал ниже целевого',
       recommendations,
     };
+    // v9: разбор живёт в ИСТОРИИ — следующая неделя затирает weekResult,
+    // но экран «Квартальный разбор» читает историю целиком.
+    (draft.history.quarterlyReviews ??= []).push(quarterlyReview);
 
     // ===== БАЛ-v2 §13 (v8): ПРЕДЛОЖЕНИЕ ДИВИДЕНДОВ НА КОНЕЦ КВАРТАЛА =====
     // FCF_кв = Δ кассы за квартал (все платежи честно идут транзакциями:
@@ -318,6 +321,21 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
         royalty,
         'out',
         `Роялти франшизы (${Math.round((restaurant.permanentEffects?.franchiseOwnerShare ?? 0) * 100)}% выручки)`,
+      );
+    }
+  }
+
+  // ===== v9: КОМИССИЯ АГРЕГАТОРА ДОСТАВКИ (если подписан договор) =====
+  {
+    const deliveryFee = deliveryRoyalty(revenue, restaurant);
+    if (deliveryFee > 0) {
+      addTransaction(
+        restaurant,
+        weekDate,
+        'other',
+        deliveryFee,
+        'out',
+        `Комиссия агрегатора доставки (${Math.round((restaurant.permanentEffects?.deliveryShare ?? 0) * 100)}% выручки)`,
       );
     }
   }

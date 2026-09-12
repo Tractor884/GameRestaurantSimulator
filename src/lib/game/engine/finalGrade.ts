@@ -1,33 +1,50 @@
 /**
- * ФИНАЛЬНЫЙ РАНГ (БАЛ-v2 §20, порт из v1.0.0): 10 рангов D−…A+ из 4
- * управленческих осей (рейтинг × маржа × BSC × текучесть) + спец-финалы.
+ * ФИНАЛЬНЫЙ УРОВЕНЬ (БАЛ-v2 §20 + запрос пользователя v9): ЕДИНАЯ шкала
+ * 0–1000 баллов и 10 уровней D−…A+ (полосы по 100 очков). Счёт 0–1000 —
+ * те же 6 направлений (финансы/клиенты/операционка/персонал/рост/риски),
+ * уровень — полоса счёта. Прежний «скор 0..100 из 4 осей» и параллельная
+ * категория статуса («сильный/устойчивый ресторан») убраны как путаница:
+ * ОДНА цифра, ОДИН уровень, статусы — только фактическая строка итога.
  *
  * БЕЗ новых бросков ГСЧ (детерминизм не затрагивается): функция чистая,
  * зависит только от состояния — одинаково работает в движковых тестах
- * и в GameOverDialog.
+ * и в GameOverDialog. Оси (рейтинг/маржа/BSC/текучесть) остаются ДИАГНОСТИКОЙ
+ * слабых мест (советы «куда расти»), но не вторым счётом.
  *
- * Калибровка порогов (по эталонам v1.0.0 §18/§19): пассив (рейтинг ~4,0,
- * маржа ~8%, BSC ~60, текучесть ~0) → C+ («пассив = середина»); сильный
- * игрок-победитель → A/A+.
+ * Калибровка полос: пассив (счёт ~480–520) → C+/C («пассив = середина»);
+ * сильный игрок-победитель → A/A+ (800+).
  */
 import type { GameState } from '../types';
 import { LOSE_CONDITIONS } from '../config/difficulty.config';
+import { computeFinalScore } from './bsc';
 
 export type FinalRankId = 'D-' | 'D' | 'D+' | 'C-' | 'C' | 'C+' | 'B' | 'B+' | 'A' | 'A+';
 
-/** Порог скора 0..1 для ранга. */
-const RANK_THRESHOLDS: readonly { rank: FinalRankId; min: number }[] = [
-  { rank: 'A+', min: 0.88 },
-  { rank: 'A', min: 0.78 },
-  { rank: 'B+', min: 0.68 },
-  { rank: 'B', min: 0.58 },
-  { rank: 'C+', min: 0.48 },
-  { rank: 'C', min: 0.38 },
-  { rank: 'C-', min: 0.28 },
-  { rank: 'D+', min: 0.18 },
-  { rank: 'D', min: 0.08 },
-  { rank: 'D-', min: 0 },
+/** 10 уровней единой шкалы: полосы по 100 очков из 1000. */
+const SCORE_BANDS: readonly { rank: FinalRankId; min: number; max: number }[] = [
+  { rank: 'A+', min: 900, max: 1000 },
+  { rank: 'A', min: 800, max: 899 },
+  { rank: 'B+', min: 700, max: 799 },
+  { rank: 'B', min: 600, max: 699 },
+  { rank: 'C+', min: 500, max: 599 },
+  { rank: 'C', min: 400, max: 499 },
+  { rank: 'C-', min: 300, max: 399 },
+  { rank: 'D+', min: 200, max: 299 },
+  { rank: 'D', min: 100, max: 199 },
+  { rank: 'D-', min: 0, max: 99 },
 ];
+
+/** Уровень единой шкалы 0–1000 (запрос пользователя: одна оценка, 10 уровней). */
+export function scoreLevel(total: number): FinalRankId {
+  const t = Math.max(0, Math.min(1000, Math.round(total)));
+  return SCORE_BANDS.find((b) => t >= b.min && t <= b.max)!.rank;
+}
+
+/** Границы полосы уровня (для подписи «700–799 из 1000»). */
+export function scoreBandRange(rank: FinalRankId): { min: number; max: number } {
+  const b = SCORE_BANDS.find((x) => x.rank === rank)!;
+  return { min: b.min, max: b.max };
+}
 
 /** Оси скора: веса §20 «рейтинг × маржа × BSC × текучесть». */
 export const GRADE_AXIS_WEIGHTS = { rating: 0.3, margin: 0.25, bsc: 0.3, turnover: 0.15 } as const;
@@ -58,9 +75,9 @@ export interface FinalGradeSpecial {
 
 export interface FinalGrade {
   rank: FinalRankId;
-  /** Итоговый скор 0..1 (взвешенная сумма осей). */
-  score: number;
-  /** Ось 0..1 по каждой компоненте (для UI-баров). */
+  /** ЕДИНЫЙ счёт 0..1000 (запрос пользователя): уровень = его полоса. */
+  score1000: number;
+  /** Ось 0..1 по каждой компоненте (только диагностика «куда расти»). */
   axes: { rating: number; margin: number; bsc: number; turnover: number };
   /** Сырые метрики финала (для отображения). */
   metrics: {
@@ -98,7 +115,9 @@ function turnoverOf(state: GameState): number {
   return Math.min(0.6, Math.max(0.05, r.risks.staff / 160));
 }
 
-/** Чистый расчёт финального ранга и спец-финалов из состояния. */
+/** Чистый расчёт финального уровня и спец-финалов из состояния.
+ *  Счёт 0–1000 — финальный счёт движка (6 направлений; на gameover уже
+ *  вычислен в weekResult), уровень — полоса счёта. */
 export function computeFinalGrade(state: GameState): FinalGrade {
   const r = state.restaurant;
   const rating = r?.reputation.rating ?? 0;
@@ -112,13 +131,15 @@ export function computeFinalGrade(state: GameState): FinalGrade {
     bsc: clamp01((bscAvg - AXIS_ANCHORS.bscLow) / (AXIS_ANCHORS.bscHigh - AXIS_ANCHORS.bscLow)),
     turnover: clamp01((AXIS_ANCHORS.turnoverZero - turnover) / (AXIS_ANCHORS.turnoverZero - AXIS_ANCHORS.turnoverFull)),
   };
-  const score =
-    GRADE_AXIS_WEIGHTS.rating * axes.rating +
-    GRADE_AXIS_WEIGHTS.margin * axes.margin +
-    GRADE_AXIS_WEIGHTS.bsc * axes.bsc +
-    GRADE_AXIS_WEIGHTS.turnover * axes.turnover;
 
-  const rank = RANK_THRESHOLDS.find((t) => score >= t.min)!.rank;
+  // ЕДИНЫЙ счёт: считаем финальный счёт движка (в weekResult он уже есть —
+  // берём готовый; иначе пересчитываем из BSC последней недели).
+  const wr = state.weekResult;
+  const score1000 =
+    wr?.finalScore?.total ??
+    (wr?.bsc ? computeFinalScore(state, wr.bsc).total : 0);
+
+  const rank = scoreLevel(score1000);
 
   const win = state.status === 'sustainable' || state.status === 'excellent';
   const bankrupt = state.status === 'bankrupt';
@@ -133,7 +154,7 @@ export function computeFinalGrade(state: GameState): FinalGrade {
 
   return {
     rank,
-    score,
+    score1000,
     axes,
     metrics: {
       rating,

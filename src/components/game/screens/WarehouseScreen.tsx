@@ -9,7 +9,7 @@ import { useMemo, useState } from 'react';
 import { useGame } from '@/lib/game/store/gameStore';
 import { SectionCard, KpiCard, EmptyState, money, moneyShort } from '../widgets';
 import { INGREDIENTS_MAP, INGREDIENT_CATEGORIES } from '@/lib/game/content/ingredients';
-import { dayIndex } from '@/lib/game/engine';
+import { dayIndex, HACCP, haccpStatus } from '@/lib/game/engine';
 import { PROCUREMENT, PROC_LABELS, activeProcurement, procAutoCoverDays } from '@/lib/game/config/procurement.config';
 import type { ProcurementPolicyId } from '@/lib/game/types';
 import { Button } from '@/components/ui/button';
@@ -33,6 +33,7 @@ import {
   Sparkles,
   Package,
   AlertTriangle,
+  ClipboardCheck,
 } from 'lucide-react';
 
 interface StockRow {
@@ -52,6 +53,7 @@ export function WarehouseScreen() {
   const purchase = useGame((s) => s.purchase);
   const autoPurchaseSet = useGame((s) => s.autoPurchaseSet);
   const procurementSet = useGame((s) => s.procurementSet);
+  const haccpAudit = useGame((s) => s.haccpAudit);
   const disabled = state.phase === 'gameover';
 
   // БАЛ-v2 §9: режим закупки + телеметрия сбоев поставок.
@@ -260,6 +262,18 @@ export function WarehouseScreen() {
         </div>
       </SectionCard>
 
+      {/* Санитарный контроль HACCP (v9) */}
+      <SectionCard title="Санитарный контроль (HACCP)" icon={ClipboardCheck}>
+        <HaccpBlock
+          lastAuditDay={restaurant.haccp?.lastAuditDay}
+          audits={restaurant.haccp?.audits ?? 0}
+          nowIdx={nowIdx}
+          cash={restaurant.finance.cash}
+          disabled={disabled}
+          onAudit={() => haccpAudit()}
+        />
+      </SectionCard>
+
       {/* Остатки по категориям */}
       <SectionCard
         title="Остатки и закупка"
@@ -463,4 +477,76 @@ function ExpiryBadge({ daysLeft }: { daysLeft: number }) {
 
 function formatQty(qty: number): string {
   return qty >= 10 ? String(Math.round(qty)) : qty.toFixed(1);
+}
+
+/** Секция HACCP (v9): статус системы + кнопка аудита + мини-чек-лист. */
+function HaccpBlock({
+  lastAuditDay,
+  audits,
+  nowIdx,
+  cash,
+  disabled,
+  onAudit,
+}: {
+  lastAuditDay?: number;
+  audits: number;
+  nowIdx: number;
+  cash: number;
+  disabled: boolean;
+  onAudit: () => void;
+}) {
+  const status = haccpStatus(lastAuditDay, nowIdx);
+  const since = lastAuditDay != null ? nowIdx - lastAuditDay : null;
+  const cost = HACCP.auditCost;
+  const canPay = cash >= cost;
+
+  const chip =
+    status === 'compliant'
+      ? { cls: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100', text: `Соответствие: ещё ${Math.max(0, HACCP.protectionDays - (since ?? 0))} дн` }
+      : status === 'neglected'
+        ? { cls: 'bg-red-100 text-red-800 hover:bg-red-100', text: `Без аудита ${since} дн — система запущена` }
+        : { cls: 'bg-amber-100 text-amber-800 hover:bg-amber-100', text: 'Система не подтверждена аудитом' };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <Badge variant="secondary" className={cn('shrink-0', chip.cls)}>
+          {chip.text}
+        </Badge>
+        <span className="text-xs text-stone-500 tabular-nums">
+          аудитов за игру: {audits}
+        </span>
+        <Button
+          className="h-11 ml-auto bg-amber-600 hover:bg-amber-700 text-white shrink-0"
+          onClick={onAudit}
+          disabled={disabled || !canPay}
+          title={
+            canPay
+              ? 'Лаборант + журналы + обучение персонала: санриск −6, окно соответствия 28 дн'
+              : `Нужно ${money(cost)} на счету`
+          }
+        >
+          <ClipboardCheck className="h-4 w-4 mr-1.5" aria-hidden />
+          Аудит HACCP — {money(cost)}
+        </Button>
+      </div>
+
+      <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+        <p className="text-xs font-semibold text-stone-600 mb-2">
+          Критические точки (что проверяет аудит):
+        </p>
+        <ul className="grid sm:grid-cols-2 gap-x-4 gap-y-1 text-xs text-stone-600">
+          <li>• приёмка поставок — температура и сроки при входе;</li>
+          <li>• хранение — журналы холодильников, ротация FIFO;</li>
+          <li>• гигиена персонала — медкнижки, санобработка смены;</li>
+          <li>• раздача — время жизни готовых блюд.</li>
+        </ul>
+        <p className="text-xs text-stone-500 mt-2.5 leading-relaxed">
+          Аудит держит санитарный риск ниже (цель ×0,75 в окне соответствия) и дешевле генеральной
+          уборки. Запущенность (56+ дней без аудита) повышает цель риска ×1,3 — проверки находят
+          систематику, а не случайность. Чистота и сроки годности выше — в «Остатках и закупке».
+        </p>
+      </div>
+    </div>
+  );
 }

@@ -55,5 +55,5 @@ console.log(
 );
 console.log('переезды:', state.history.relocations);
 const grade = computeFinalGrade(state);
-console.log('ФИНАЛЬНЫЙ РАНГ:', grade.rank, '| скор', (grade.score * 100).toFixed(0), '| оси:', JSON.stringify(grade.axes));
+console.log('ФИНАЛЬНЫЙ УРОВЕНЬ:', grade.rank, '| счёт', grade.score1000, '/1000 | оси:', JSON.stringify(grade.axes));
 console.log('спец:', JSON.stringify(grade.special));
