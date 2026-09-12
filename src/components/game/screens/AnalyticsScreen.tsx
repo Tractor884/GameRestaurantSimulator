@@ -33,11 +33,17 @@ export function AnalyticsScreen() {
   const state = useGame((s) => s.state)!;
   const weekStats = state.history.weekStats;
 
-  const avgCheck = weekStats.length > 0 ? weekStats.reduce((s, w) => s + w.avgCheck, 0) / weekStats.length : 0;
-  const avgRating = weekStats.length > 0 ? weekStats.reduce((s, w) => s + w.rating, 0) / weekStats.length : 0;
-  // АУДИТ №13: явная метрика доли возвратных гостей (зрелый ресторан 15–30%).
-  const retRecent = weekStats.slice(-4);
-  const avgReturning = retRecent.length > 0 ? retRecent.reduce((s, w) => s + w.returningShare, 0) / retRecent.length : 0;
+  // Агрегации по weekStats (reduce) — useMemo (рекомендация №7): weekStats
+  // иммутабелен по ссылке после закрытия недели, пересчёт только при смене.
+  const { avgCheck, avgRating, avgReturning } = useMemo(() => {
+    const retRecent = weekStats.slice(-4);
+    return {
+      avgCheck: weekStats.length > 0 ? weekStats.reduce((s, w) => s + w.avgCheck, 0) / weekStats.length : 0,
+      avgRating: weekStats.length > 0 ? weekStats.reduce((s, w) => s + w.rating, 0) / weekStats.length : 0,
+      // АУДИТ №13: явная метрика доли возвратных гостей (зрелый ресторан 15–30%).
+      avgReturning: retRecent.length > 0 ? retRecent.reduce((s, w) => s + w.returningShare, 0) / retRecent.length : 0,
+    };
+  }, [weekStats]);
 
   const lineData = useMemo(
     () =>

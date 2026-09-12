@@ -47,6 +47,7 @@ import { initLandlordState, applyLandlordResolution } from './landlord';
 import { applyDividendDecision, applyOwnerForcePay, applyOwnerRefuse } from './dividends';
 import { applyDilemmaResolution } from './dilemmas';
 import { hireCostMult } from './permanent';
+import { noteDishAdded, noteDishRemoved } from './menufatigue';
 
 export interface SetupOptions {
   seed: number;
@@ -185,7 +186,15 @@ export function createGame(opts: SetupOptions): GameState {
     // v9: санитарная система HACCP — открытие считается аудитом
     // (окно соответствия 28 дн с первого дня, дальше — решения игрока).
     haccp: { lastAuditDay: 0, audits: 0 },
-    menu: { dishes: [...menuIds], prices, stopList: [], customDishes: [] },
+    menu: {
+      dishes: [...menuIds],
+      prices,
+      stopList: [],
+      customDishes: [],
+      // v10 §14: возраст блюд — стартовое меню «новое» (недели 0–3: +6% новизны).
+      dishAges: Object.fromEntries(menuIds.map((id) => [id, 0] as const)),
+      offSince: {},
+    },
     inventory: { batches: [], pendingOrders: [], procurement: { policy: 'standard', pendingSwitch: null }, supplyErrorsWeek: 0 },
     staff: { pools: defaultPools(), schedule: defaultSchedule() },
     finance: {
@@ -196,6 +205,8 @@ export function createGame(opts: SetupOptions): GameState {
       accrued: { payrollGross: 0, taxProfit: 0, rentPaidWeeks: 0 },
       ownerTrust: DIVIDENDS.trustStart,
       dividends: { history: [], lastProposal: null, quarterStartCash: 0 },
+      // v10 §10: инфляция — индексы 1.0 на старте, квартальные шаги в closeWeek.
+      inflation: { foodIdx: 1, wageIdx: 1, utilIdx: 1, steps: 0 },
     },
     reputation: {
       rating: 3.9,
@@ -316,11 +327,21 @@ export function toggleMenuDish(state: GameState, dishId: string): ActionResult {
   const idx = r.menu.dishes.indexOf(dishId);
   if (idx >= 0) {
     r.menu.dishes.splice(idx, 1);
-    return { ok: true, message: `«${dish.name}» убрано из меню` };
+    // v10 §14: запоминаем неделю снятия — вернувшись после 4+ недель,
+    // блюдо снова станет «новым» (ротация); быстрый возврат не сбрасывает возраст.
+    noteDishRemoved(r.menu, dishId, state.week);
+    return { ok: true, message: `«${dish.name}» убрано из меню (верните через 4+ недели — станет новинкой)` };
   }
   r.menu.dishes.push(dishId);
   if (!r.menu.prices[dishId]) r.menu.prices[dishId] = dish.recommendedPrice;
-  return { ok: true, message: `«${dish.name}» добавлено в меню` };
+  // v10 §14: возраст блюда — по правилам ротации.
+  const isRotation = noteDishAdded(r.menu, dishId, state.week);
+  return {
+    ok: true,
+    message: isRotation
+      ? `«${dish.name}» — новинка меню (+6% спроса первые недели)`
+      : `«${dish.name}» добавлено в меню`,
+  };
 }
 
 export function setDishPrice(state: GameState, dishId: string, price: number): ActionResult {
@@ -365,6 +386,8 @@ export function importCustomDishes(state: GameState, dishes: Dish[]): ActionResu
       added++;
       r.menu.dishes.push(dish.id);
       if (!r.menu.prices[dish.id]) r.menu.prices[dish.id] = dish.recommendedPrice;
+      // v10 §14: новое блюдо — новинка (+6% спроса первые недели).
+      noteDishAdded(r.menu, dish.id, state.week);
     }
   }
   const parts: string[] = [];

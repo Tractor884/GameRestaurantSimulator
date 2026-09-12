@@ -32,6 +32,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { dishAge, dishFreshnessFactor, menuFreshnessFactor, freshnessBadge } from '@/lib/game/engine';
+import { foodInflationIdx } from '@/lib/game/engine/inventory';
+import { recipeCost } from '@/lib/game/content/dishes';
 import { CsvMenuTools } from '../CsvMenuTools';
 import { CustomDishImport } from '../CustomDishImport';
 import {
@@ -42,6 +45,7 @@ import {
   Sparkles,
   Percent,
   ListOrdered,
+  CalendarClock,
 } from 'lucide-react';
 import type { Dish, DishCategory } from '@/lib/game/types';
 
@@ -88,10 +92,22 @@ export function MenuScreen() {
 
   const priceOf = (d: Dish) => restaurant.menu.prices[d.id] ?? d.recommendedPrice;
 
+  // v10 §10: себестоимость по текущим закупочным ценам (× индекс инфляции) —
+  // бейджи FC честно растут вместе с закупками, подталкивая к переоценке меню.
+  const foodIdx = foodInflationIdx(restaurant);
+  const fcOf = (d: Dish, price: number) => (recipeCost(d) * foodIdx) / Math.max(1, price);
+
   const avgFoodCost =
     menuDishes.length > 0
-      ? menuDishes.reduce((s, d) => s + recipeFoodCost(d, priceOf(d)), 0) / menuDishes.length
+      ? menuDishes.reduce((s, d) => s + fcOf(d, priceOf(d)), 0) / menuDishes.length
       : 0;
+
+  // v10 §14: свежесть меню (возвратные гости × фактор).
+  const freshness = menuFreshnessFactor(restaurant);
+  const staleCount = menuDishes.filter(
+    (d) => (freshnessBadge(dishAge(restaurant.menu, d.id))?.tone ?? '') === 'stale' ||
+            (freshnessBadge(dishAge(restaurant.menu, d.id))?.tone ?? '') === 'very-stale',
+  ).length;
 
   const warnings: string[] = [];
   if (menuDishes.length > 0 && menuDishes.length < MENU_SIZE.recommendedMin) {
@@ -109,13 +125,21 @@ export function MenuScreen() {
       `В стоп-листе ${stopIds.size} блюд — гости не могут заказать пятую часть меню. Проверьте склад.`,
     );
   }
+  // v10 §14: меню-усталость — прямая подсказка про ротацию.
+  if (freshness < 0.95) {
+    warnings.push(
+      `Меню приелось постоянным гостям (возвратность −${Math.round((1 - freshness) * 100)}%): снимите ${
+        Math.max(2, staleCount) 
+      } блюда на 4+ недели и верните — они снова станут новинками (+6% спроса).`,
+    );
+  }
 
   const categoriesPresent = CATEGORY_KEYS.filter((c) => (byCategory.get(c)?.length ?? 0) > 0);
 
   return (
     <div className="space-y-4">
       {/* Заголовок: статистика меню */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <KpiCard
           icon={BookOpen}
           label="Блюд в меню"
@@ -127,8 +151,19 @@ export function MenuScreen() {
           icon={Percent}
           label="Средний FoodCost"
           value={menuDishes.length > 0 ? pct(avgFoodCost) : '—'}
-          sub="цель 30–34%"
+          sub={foodIdx > 1.001 ? `с инфляцией закупок +${Math.round((foodIdx - 1) * 100)}%` : 'цель 30–34%'}
           tone={avgFoodCost > 0.35 ? 'bad' : avgFoodCost < 0.34 ? 'good' : 'warn'}
+        />
+        <KpiCard
+          icon={CalendarClock}
+          label="Свежесть меню"
+          value={`${Math.round(freshness * 100)}%`}
+          sub={
+            freshness >= 0.99
+              ? 'ротация не требуется'
+              : `приелось: ${staleCount} блюд · возвратность −${Math.round((1 - freshness) * 100)}%`
+          }
+          tone={freshness >= 0.99 ? 'good' : freshness >= 0.93 ? 'warn' : 'bad'}
         />
         <KpiCard
           icon={Ban}
@@ -192,6 +227,8 @@ export function MenuScreen() {
                   key={d.id}
                   dish={d}
                   price={priceOf(d)}
+                  fc={fcOf(d, priceOf(d))}
+                  age={dishAge(restaurant.menu, d.id)}
                   stopListed={stopIds.has(d.id)}
                   licenseBlocked={!!d.requiresAlcoholLicense && !restaurant.licenses.alcohol?.active}
                   custom={customIds.has(d.id)}
@@ -209,6 +246,8 @@ export function MenuScreen() {
                     key={d.id}
                     dish={d}
                     price={priceOf(d)}
+                    fc={fcOf(d, priceOf(d))}
+                    age={dishAge(restaurant.menu, d.id)}
                     stopListed={stopIds.has(d.id)}
                     licenseBlocked={!!d.requiresAlcoholLicense && !restaurant.licenses.alcohol?.active}
                     custom={customIds.has(d.id)}
@@ -227,10 +266,12 @@ export function MenuScreen() {
   );
 }
 
-/** Строка блюда: цена, FoodCost, стоп-лист, удаление. */
+/** Строка блюда: цена, FoodCost, стоп-лист, удаление, свежесть (v10 §14). */
 function DishRow({
   dish,
   price,
+  fc,
+  age,
   stopListed,
   licenseBlocked,
   custom,
@@ -241,6 +282,10 @@ function DishRow({
 }: {
   dish: Dish;
   price: number;
+  /** FoodCost по текущим ценам закупки (с инфляцией §10). */
+  fc: number;
+  /** Возраст блюда в меню, недель (§14). */
+  age: number;
   stopListed: boolean;
   licenseBlocked: boolean;
   custom: boolean;
@@ -249,9 +294,9 @@ function DishRow({
   onStop: () => void;
   onRemove: () => void;
 }) {
-  const fc = recipeFoodCost(dish, price);
   const cat = MENU_CATEGORIES[dish.category];
   const dishScore = Math.round((dish.baseQuality + dish.basePopularity) / 2);
+  const fresh = freshnessBadge(age);
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 py-3 border-b border-stone-100 last:border-0">
@@ -263,6 +308,26 @@ function DishRow({
             {dish.name}
           </span>
           <FcBadge fc={fc} />
+          {fresh && (
+            <Badge
+              variant="secondary"
+              className={cn(
+                'border hover:bg-transparent',
+                fresh.tone === 'novelty'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : fresh.tone === 'stale'
+                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    : 'bg-orange-100 text-orange-900 border-orange-300',
+              )}
+              title={
+                fresh.tone === 'novelty'
+                  ? `Новинка: +6% спроса первые недели (на меню ${age} нед.)`
+                  : `На меню ${age} нед. без ротации: −${Math.abs(Math.round((dishFreshnessFactor(age) - 1) * 100))}% спроса. Снимите на 4+ недели и верните — станет новинкой.`
+              }
+            >
+              {fresh.label}
+            </Badge>
+          )}
           {custom && (
             <Badge
               variant="secondary"

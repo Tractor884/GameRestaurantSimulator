@@ -68,7 +68,16 @@ export {
   type ServiceStatus,
 } from '../config/equipmentService.config';
 export { HACCP, haccpStatus, type HaccpStatus } from '../config/haccp.config';
+export { INFLATION, OVERTIME, FOOD_STEP, WAGE_STEP, UTIL_STEP } from '../config/inflation.config';
 export { currentRentMonthly, rentIndexationInfo } from './landlord';
+export {
+  dishAge,
+  dishFreshnessFactor,
+  menuFreshnessFactor,
+  freshnessBadge,
+  noteDishAdded,
+  noteDishRemoved,
+} from './menufatigue';
 export {
   computeFinalGrade,
   scoreLevel,

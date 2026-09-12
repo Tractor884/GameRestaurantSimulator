@@ -55,6 +55,7 @@ const TX_LABELS: Record<TransactionType, string> = {
   training: 'Тренинги персонала',
   insurance: 'Медстраховка',
   dividend: 'Дивиденды владельцу',
+  overtime: 'Сверхурочные',
   other: 'Прочее',
 };
 
@@ -73,6 +74,13 @@ export function FinanceScreen() {
   );
 
   const ebitdaMargin = pnl && pnl.revenue > 0 ? pnl.operatingProfit / pnl.revenue : null;
+
+  // v10 §10: инфляционная сводка — видна, когда индексы уже выросли.
+  const inf = restaurant.finance.inflation;
+  const infWarning =
+    inf && inf.steps > 0
+      ? `Инфляция с открытия: закупки +${Math.round((inf.foodIdx - 1) * 100)}%, оклады +${Math.round((inf.wageIdx - 1) * 100)}%, коммуналка +${Math.round((inf.utilIdx - 1) * 100)}%. Цены меню автоматически не растут — без переоценки маржа эрозируется.`
+      : null;
 
   return (
     <div className="space-y-4">
@@ -121,6 +129,7 @@ export function FinanceScreen() {
       <WarningBanner
         warnings={[
           'Прибыль ≠ деньги на счёте. P&L считает по начислению (аренда, амортизация, налоги), а деньги приходят и уходят в другом ритме — смотрите Cash Flow.',
+          ...(infWarning ? [infWarning] : []),
         ]}
       />
 
@@ -173,9 +182,24 @@ export function FinanceScreen() {
                 <div>
                   <MetricRow label="Зарплата (gross)" value={money(-pnl.payroll)} hint="laborCost" />
                   <MetricRow label="Соц. взносы (30%)" value={money(-pnl.socialContributions)} hint="laborCost" />
+                  {!!pnl.overtime && (
+                    <MetricRow
+                      label="Сверхурочные (×1,5)"
+                      value={money(-pnl.overtime)}
+                      hint="Перегруз кухонных станций: часы после 8-й — по ×1,5 (ТК РФ). Наймите людей или ослабьте график — переработки уйдут."
+                    />
+                  )}
                   {!!pnl.insurance && <MetricRow label="Медстраховка персонала" value={money(-pnl.insurance)} hint="Медстраховка (экран «Персонал»): 4% недельного ФОТ, снижает риск увольнений" />}
                   <MetricRow label="Аренда (начислено)" value={money(-pnl.rentAccrued)} />
-                  <MetricRow label="Коммунальные (начислено)" value={money(-pnl.utilitiesAccrued)} />
+                  <MetricRow
+                    label="Коммунальные (начислено)"
+                    value={money(-pnl.utilitiesAccrued)}
+                    hint={
+                      (restaurant.finance.inflation?.steps ?? 0) > 0
+                        ? `Сезон × инфляция коммуналки +${Math.round(((restaurant.finance.inflation?.utilIdx ?? 1) - 1) * 100)}%`
+                        : 'Зимой отопление +25%, летом вентиляция +15%'
+                    }
+                  />
                   <MetricRow label="Маркетинг" value={money(-pnl.marketing)} />
                   <MetricRow label="Обслуживание" value={money(-pnl.maintenance)} />
                   <MetricRow label="Ремонты" value={money(-pnl.repairs)} />

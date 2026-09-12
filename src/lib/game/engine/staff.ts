@@ -142,7 +142,13 @@ export function waiterLoad(restaurant: Restaurant, guestsThisHour: number, day: 
   return guestsThisHour / (waiters * (STAFF_ROLES.waiter.guestsPerHour ?? 12));
 }
 
-/** Начисление зарплаты за день (gross), ₽. Часы: смена = 8 часов. */
+/** Индекс индексации окладов (БАЛ-v2 §10, v10): квартальные шаги, +12,5%/год. */
+export function wageInflationIdx(restaurant: Restaurant): number {
+  return restaurant.finance.inflation?.wageIdx ?? 1;
+}
+
+/** Начисление зарплаты за день (gross), ₽. Часы: смена = 8 часов.
+ *  БАЛ-v2 §10 (v10): × индекс индексации окладов. */
 export function accruePayrollDay(restaurant: Restaurant, date: GameDate): number {
   const staff = restaurant.staff;
   let gross = 0;
@@ -154,7 +160,7 @@ export function accruePayrollDay(restaurant: Restaurant, date: GameDate): number
     const paidShifts = Math.min(shifts.morning + shifts.evening, Math.ceil(poolCap * 1.4));
     gross += paidShifts * 8 * hourlyRate(roleId);
   }
-  return Math.round(gross);
+  return Math.round(gross * wageInflationIdx(restaurant));
 }
 
 /**
@@ -184,6 +190,9 @@ export function updateFatigue(
   date: GameDate,
   roleLoads: Partial<Record<RoleId, number>>,
   diffFatigueRate: number,
+  /** v10 §5.2: перегрузочный день (пик загрузки станций > порога) —
+   *  прирост усталости ×1,2: «после 8 часов — сверхурочная смена». */
+  overloadMult = 1,
 ): void {
   const staff = restaurant.staff;
   const avgLoad = averageLoadOfLoads(roleLoads);
@@ -207,8 +216,9 @@ export function updateFatigue(
     const scaled = growth > 0 ? growth * diffFatigueRate : growth;
     // ДИЛЕММА «Кризис» (держаться, §15): усталость копится быстрее (×1,3)
     // в окне кадрового кризиса — команда «пережидает волну» на износ.
+    // v10 §5.2: перегрузочный день — ещё ×OVERTIME.fatigueBoost (+20%).
     const crisis = growth > 0 ? fatigueGrowthMult(restaurant, date.week) : 1;
-    pool.fatigue = clamp(pool.fatigue + scaled * crisis, 0, 100);
+    pool.fatigue = clamp(pool.fatigue + scaled * crisis * (growth > 0 ? overloadMult : 1), 0, 100);
     // Мораль: усталость и перегрузка давят, чаевые поднимают (в day.ts).
     // Медстраховка (благосостояние): падение морали медленнее (×0.24).
     const targetMorale = clamp(85 - pool.fatigue * 0.5 - Math.max(0, roleLoad - 1) * 30, 0, 100);

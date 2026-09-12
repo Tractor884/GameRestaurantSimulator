@@ -455,7 +455,9 @@ export const useGame = create<GameStore>((set, get) => ({
  *  профилактика оборудования (запрос пользователя).
  *  v9: квартальные разборы — в историю (не затираются следующей неделей),
  *  HACCP — санитарная система (миграция = день «аудита», без штрафа),
- *  рутина дилемм и комиссия доставки в перманентных эффектах. */
+ *  рутина дилемм и комиссия доставки в перманентных эффектах.
+ *  v10: инфляция (§10: индексы закупок/ФОТ/коммуналки с 1.0) и меню-усталость
+ *  (§14: возраст блюд с 0 — старые сейвы без штрафа). */
 function migrateState(state: GameState): void {
   const r = state.restaurant;
   // v4: настройки геймплея.
@@ -520,6 +522,16 @@ function migrateState(state: GameState): void {
   if (r && r.haccp == null) {
     const absDayV9 = (state.week - 1) * 7 + state.day;
     r.haccp = { lastAuditDay: absDayV9, audits: 0 };
+  }
+  // ===== v10: ИНФЛЯЦИЯ §10 + МЕНЮ-УСТАЛОСТЬ §14 =====
+  // Индексы 1.0 на момент миграции (инфляция стартует с текущего квартала);
+  // возраст блюд — 0 (старое меню считается «свежим», без штрафа).
+  if (r) {
+    if (r.finance.inflation == null) {
+      r.finance.inflation = { foodIdx: 1, wageIdx: 1, utilIdx: 1, steps: 0 };
+    }
+    if (r.menu.dishAges == null) r.menu.dishAges = {};
+    if (r.menu.offSince == null) r.menu.offSince = {};
   }
   if (r) {
     // v4: кастомные блюда (CSV-импорт новых блюд §35.3–35.4).

@@ -128,6 +128,7 @@ export type TransactionType =
   | 'training' // тренинги персонала
   | 'insurance' // медстраховка персонала
   | 'dividend' // дивиденды владельцу (БАЛ-v2 §13, v8)
+  | 'overtime' // сверхурочные (БАЛ-v2 §5.2, v10)
   | 'other';
 
 /* ============================= КОНТЕНТ ============================= */
@@ -171,6 +172,10 @@ export interface MenuState {
   /** Кастомные блюда (CSV-импорт ТЗ §35.3–35.4). Живут в состоянии —
    *  доступны всем системам движка и переживают сейв/загрузку. */
   customDishes: Dish[];
+  /** Возраст блюд в меню, недель (меню-усталость §14, v10). */
+  dishAges?: Record<string, number>;
+  /** Неделя снятия блюда с меню (детекция ротации §14, v10). */
+  offSince?: Record<string, number>;
 }
 
 export interface InventoryBatch {
@@ -447,6 +452,20 @@ export interface FinanceState {
   ownerTrust?: number;
   /** Дивиденды: история и активное предложение квартала (v8). */
   dividends?: DividendsState;
+  /** Инфляция (БАЛ-v2 §10, v10): индексы закупок/ФОТ/коммуналки, шаг раз в квартал. */
+  inflation?: InflationState;
+}
+
+/** Индексы инфляции (v10): растут квартальными шагами, детерминированно. */
+export interface InflationState {
+  /** Множитель закупочных цен ингредиентов (1.0 на старте). */
+  foodIdx: number;
+  /** Множитель окладов (применяется к начислению ФОТ). */
+  wageIdx: number;
+  /** Множитель коммунальных (поверх сезонного). */
+  utilIdx: number;
+  /** Число прошедших шагов индексации (для индикации). */
+  steps: number;
 }
 
 /** Состояние дивидендов (БАЛ-v2 §13). */
@@ -485,6 +504,8 @@ export interface PnlReport {
   otherOperating: number;
   /** Медстраховка персонала за неделю (благосостояние, опционально). */
   insurance?: number;
+  /** Сверхурочные за неделю (БАЛ-v2 §5.2, v10): γ × перегруз × ФОТ. */
+  overtime?: number;
   operatingProfit: number; // EBITDA
   loanInterest: number;
   taxableProfit: number;
@@ -514,6 +535,8 @@ export interface CashFlowReport {
   ownerContributions: number;
   /** Выплаченные дивиденды владельцу (БАЛ-v2 §13, v8). */
   dividendsPaid: number;
+  /** Сверхурочные (БАЛ-v2 §5.2, v10). */
+  overtimePaid: number;
   eventIncome: number;
   cashEnd: number;
 }

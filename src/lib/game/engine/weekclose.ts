@@ -42,6 +42,8 @@ import { REVIEWS_V2 } from '../config/reviews.config';
 import { PROCUREMENT } from '../config/procurement.config';
 import { SECRETARY_EFFECTS } from '../config/staffRoles.config';
 import { DIVIDENDS, dividendProposal } from '../config/dividends.config';
+import { FOOD_STEP, OVERTIME, UTIL_STEP, WAGE_STEP } from '../config/inflation.config';
+import { bumpDishAges, menuFreshnessFactor } from './menufatigue';
 import { checkLandlordSchedule, currentRentMonthly } from './landlord';
 import { createOwnerDividendEvent, createOwnerTalkEvent, ownerReplaced } from './dividends';
 import { checkDilemmas, checkBribeScandal, checkChefQuit } from './dilemmas';
@@ -92,7 +94,9 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   const monthNow = monthOfDay(dayOfYear(week, 3));
   const seasonalUtilK =
     monthNow === 12 || monthNow <= 2 ? 1.25 : monthNow >= 6 && monthNow <= 8 ? 1.15 : 1.0;
-  const utilitiesAccrued = Math.round((restaurant.utilitiesMonthly * seasonalUtilK) / 4);
+  // БАЛ-v2 §10 (v10): коммунальные × индекс инфляции (квартальные шаги).
+  const utilIdx = restaurant.finance.inflation?.utilIdx ?? 1;
+  const utilitiesAccrued = Math.round((restaurant.utilitiesMonthly * seasonalUtilK * utilIdx) / 4);
   const equipmentValue =
     restaurant.equipment.kitchen.value + restaurant.equipment.coffee.value + restaurant.equipment.hall.value;
   const depreciation = Math.round(equipmentValue / DEPRECIATION_MONTHS / 4);
@@ -105,6 +109,30 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     EQUIPMENT_LEVELS[restaurant.equipment.hall.level].maintenanceCostPerWeek * 0.3;
   const otherOperating = FINANCE.otherWeeklyCost + restaurant.marketing.cleaningBudget;
 
+  // ===== ПЕРЕРАБОТКИ (БАЛ-v2 §5.2, v10) =====
+  // Пиковая загрузка худшей станции недели: команда задерживается на смене,
+  // когда повара не успевают (ТК РФ: часы после 8-й — ×1,5).
+  //   Overload = max(0, пик − 0,90);  Cost = γ × Overload × ФОТ, кап 8% ФОТ.
+  // Плата живёт транзакцией «overtime» — видна в кассе и кэш-флоу.
+  let overtime = 0;
+  if (payroll > 0) {
+    let peakLoad = 0;
+    for (const l of dayLogs) {
+      for (const h of l.hourLogs) {
+        for (const v of Object.values(h.stationLoads)) {
+          if ((v ?? 0) > peakLoad) peakLoad = v ?? 0;
+        }
+      }
+    }
+    const overload = Math.max(0, peakLoad - OVERTIME.threshold);
+    if (overload > 0) {
+      overtime = Math.min(
+        Math.round(OVERTIME.gamma * overload * payroll),
+        Math.round(OVERTIME.capShare * payroll),
+      );
+    }
+  }
+
   // P&L (ТЗ §18.4). АУДИТ (§5.1): эквайринг — РАСХОД P&L, раньше комиссия
   // существовала только в кэше (sale-транзакция = net) и завышала прибыль
   // на ~2% выручки. Теперь P&L: GrossRevenue → −эквайринг → себестоимость…
@@ -113,7 +141,7 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   const grossProfit = revenue - cogs - wasteCost - acquiringPnl;
   const operatingProfit =
     grossProfit - payroll - socialContributions - rentAccrued - utilitiesAccrued -
-    marketing - maintenance - depreciation - licenseAmortization - otherOperating - insuranceCost;
+    marketing - maintenance - depreciation - licenseAmortization - otherOperating - insuranceCost - overtime;
   const loanInterest = Math.round(
     restaurant.finance.loans.reduce((s, l) => s + (l.remaining * l.annualRate) / 12, 0),
   );
@@ -128,6 +156,7 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     depreciation, licenseAmortization, otherOperating, operatingProfit,
     loanInterest, taxableProfit, tax, netProfit, acquiringFees: acquiringPnl,
     insurance: insuranceCost,
+    overtime,
   };
 
   // ===== ДВИЖЕНИЕ ДЕНЕГ (cash flow) =====
@@ -141,13 +170,18 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   if (insuranceCost > 0) {
     addTransaction(restaurant, weekDate, 'insurance', insuranceCost, 'out', 'Медстраховка персонала (4% ФОТ)');
   }
+  // v10 §5.2: сверхурочные — с зарплатой же и платятся (часы после 8-й ×1,5).
+  if (overtime > 0) {
+    addTransaction(restaurant, weekDate, 'overtime', overtime, 'out', 'Сверхурочные (×1,5 после 8 ч) — перегруз кухонных станций');
+  }
   restaurant.finance.accrued.payrollGross = 0;
 
   // Аренда и коммунальные: каждые 4 недели.
   if (week > 0 && week % 4 === 0) {
     addTransaction(restaurant, weekDate, 'rent', restaurant.rentMonthly, 'out', 'Аренда за месяц');
     const utilSeasonNote = seasonalUtilK > 1 ? (seasonalUtilK >= 1.25 ? 'Коммунальные за месяц (зима, отопление +25%)' : 'Коммунальные за месяц (лето, вентиляция +15%)') : 'Коммунальные за месяц';
-    addTransaction(restaurant, weekDate, 'utilities', Math.round(restaurant.utilitiesMonthly * seasonalUtilK), 'out', utilSeasonNote);
+    const utilNote = utilIdx > 1.001 ? `${utilSeasonNote} · инфляция +${Math.round((utilIdx - 1) * 100)}%` : utilSeasonNote;
+    addTransaction(restaurant, weekDate, 'utilities', Math.round(restaurant.utilitiesMonthly * seasonalUtilK * utilIdx), 'out', utilNote);
   }
 
   // Налоги: каждые 4 недели по накопленной базе (ТЗ §18.7).
@@ -199,6 +233,18 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   // ===== КВАРТАЛЬНЫЙ РАЗБОР (ТЗ §28) =====
   let quarterlyReview: QuarterlyReview | undefined;
   if (week > 0 && week % QUARTERLY_WEEKS === 0) {
+    // ===== БАЛ-v2 §10 (v10): ШАГ ИНФЛЯЦИИ НА ЗАКРЫТИИ КВАРТАЛА =====
+    // Закупки +10%/год, оклады +12,5%, коммуналка +17,5% (запрос пользователя).
+    // Начинает действовать со СЛЕДУЮЩЕЙ недели: закрытая неделя честно
+    // платит по старым индексам. Цены меню не индексируются — эрозия маржи
+    // при бездействии, перекладывание в цены возвращает почти всё.
+    {
+      const inf = (restaurant.finance.inflation ??= { foodIdx: 1, wageIdx: 1, utilIdx: 1, steps: 0 });
+      inf.foodIdx *= FOOD_STEP;
+      inf.wageIdx *= WAGE_STEP;
+      inf.utilIdx *= UTIL_STEP;
+      inf.steps += 1;
+    }
     const quarter = week / QUARTERLY_WEEKS;
     const quarterStats = draft.history.weekStats.slice(-QUARTERLY_WEEKS);
     const qRevenue = quarterStats.reduce((s, w) => s + w.revenue, 0);
@@ -216,6 +262,13 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     }
     if (restaurant.risks.financial > 50) {
       recommendations.push('Финансовый риск высок: держите денежный запас 3+ млн ₽.');
+    }
+    // v10 §10/§14: обучение — инфляция и меню-усталость попадают в разбор квартала.
+    if ((restaurant.finance.inflation?.steps ?? 0) >= 1 && pnl.revenue > 0 && (cogs + wasteCost) / pnl.revenue > 0.34) {
+      recommendations.push('Инфляция закупок съедает маржу: Food Cost выше 34% — переоцените меню.');
+    }
+    if (menuFreshnessFactor(restaurant) < 0.95) {
+      recommendations.push('Меню приелось постоянным гостям: ротация блюд вернёт возвратность.');
     }
     if (recommendations.length === 0) recommendations.push('Показатели в норме — думайте о росте выручки.');
     quarterlyReview = {
@@ -380,6 +433,10 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   // ===== БАЛ-v2 §9: СБРОС НЕДЕЛЬНОГО СЧЁТЧИКА СБОЕВ ПОСТАВКИ =====
   restaurant.inventory.supplyErrorsWeek = 0;
 
+  // ===== v10 §14: МЕНЮ-УСТАЕМ — блюда стареют на неделю =====
+  // (ротация: снятое ≥4 недели блюдо возвращается «новым», см. menufatigue.ts)
+  bumpDishAges(restaurant.menu);
+
   // ===== ИСТОРИЯ =====
   const guests = dayResults.reduce((s, r) => s + r.kpi.guests, 0);
   const returningGuests = dayResults.reduce((s, r) => s + r.kpi.returningGuests, 0);
@@ -496,6 +553,7 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     loanDisbursements: sumType('loan_disbursement', 'in'),
     ownerContributions: sumType('other', 'in'),
     dividendsPaid: sumType('dividend'),
+    overtimePaid: sumType('overtime'),
     eventIncome: 0,
     cashEnd: restaurant.finance.cash,
   };

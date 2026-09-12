@@ -58,6 +58,7 @@ import {
 import { checkInvariants } from './invariants';
 import { reviewNeedsReply } from '../config/reviews.config';
 import { activeProcurement, procAutoCoverDays } from '../config/procurement.config';
+import { OVERTIME } from '../config/inflation.config';
 
 /** Накопители дня (двигаются по часам; при паузе — замораживаются в контексте). */
 export interface DayTotals {
@@ -72,6 +73,8 @@ export interface DayTotals {
   stopListHits: number;
   seatedBySegment: Record<SegmentId, number>;
   kitchenOverloadHours: number;
+  /** v10 §5.2: пиковая загрузка худшей станции за день (для переработок/усталости). */
+  peakStationLoad: number;
   staffLoadSum: number;
   /** Позиций продано (для относительных порогов: стоп-листы к объёму). */
   orders: number;
@@ -118,6 +121,7 @@ function emptyTotals(): DayTotals {
     stopListHits: 0,
     seatedBySegment: { ...emptyReturning() } as Record<SegmentId, number>,
     kitchenOverloadHours: 0,
+    peakStationLoad: 0,
     staffLoadSum: 0,
     orders: 0,
     categoryRevenue: {},
@@ -285,6 +289,8 @@ export function runHoursUntil(draft: GameState, run: DayRunContext, stopBeforeHo
     for (const segId of SEGMENT_IDS) totals.seatedBySegment[segId] += hourResult.seated[segId] ?? 0;
     const maxLoad = Math.max(0, ...Object.values(hourResult.hourLog.stationLoads).map((v) => v ?? 0));
     if (maxLoad > 1) totals.kitchenOverloadHours += 1;
+    // v10 §5.2: пик худшей станции за день (порог переработок — 0,90).
+    totals.peakStationLoad = Math.max(totals.peakStationLoad, maxLoad);
     totals.staffLoadSum += Math.max(
       hourResult.hourLog.waiterLoad,
       ...Object.values(hourResult.hourLog.stationLoads).map((v) => v ?? 0),
@@ -342,8 +348,11 @@ export function finishDay(
   updateComfortAtmosphere(restaurant, monthOfDay(dayOfYear(date.week, date.day)));
   updateEquipmentWear(restaurant, totals.kitchenOverloadHours > 0 ? 1.2 : 0.7, date);
   // Усталость: пофункциональные нагрузки (пик по «горячим» часам дня).
+  // v10 §5.2: перегрузочный день (пик станций > 0,90) — прирост усталости ×1,2
+  // («после 8 часов — сверхурочная смена», запрос пользователя).
   const roleLoads = buildRoleLoads(hourLogs);
-  updateFatigue(restaurant, date, roleLoads, DIFFICULTIES[draft.difficultyId]?.staffFatigueRate ?? 1);
+  const overloadMult = totals.peakStationLoad > OVERTIME.threshold ? OVERTIME.fatigueBoost : 1;
+  updateFatigue(restaurant, date, roleLoads, DIFFICULTIES[draft.difficultyId]?.staffFatigueRate ?? 1, overloadMult);
   const avgStaffLoad = run.hours.length > 0 ? totals.staffLoadSum / run.hours.length : 0;
 
   // Чаевые → мораль персонала (ТЗ §14.11).
