@@ -680,20 +680,6 @@ export function resolveEvent(state: GameState, eventId: string, resolutionIndex:
   return { ok: true, message: res.note };
 }
 
-/** Автозаказ: рекомендованный объём продуктов на N дней.
- * Ожидаемый трафик берём из факта прошлой недели, иначе — 75% потенциала района. */
-export function autoOrderAction(state: GameState, days: number): ActionResult {
-  const r = state.restaurant!;
-  const loc = LOCATIONS_MAP[r.locationId];
-  const lastWeek = state.history.weekStats[state.history.weekStats.length - 1];
-  const expected = lastWeek && lastWeek.guests > 0
-    ? (lastWeek.guests / 7) * 1.25
-    : loc.baseTraffic * 0.85;
-  const order = buildAutoOrder(r, days, expected);
-  if (order.length === 0) return { ok: false, message: 'Склад укомплектован' };
-  return purchaseIngredients(state, order, false);
-}
-
 /** Переключение автозаказа «завхоза» (ежедневная дозакупка на старте дня). */
 export function setAutoPurchase(state: GameState, enabled: boolean, coverDays: number): ActionResult {
   const r = state.restaurant!;

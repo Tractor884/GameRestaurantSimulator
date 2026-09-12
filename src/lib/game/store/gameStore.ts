@@ -32,7 +32,6 @@ import {
   buyAlcoholLicense,
   repayLoan,
   resolveEvent,
-  autoOrderAction,
   setAutoPurchase,
   setProcurementPolicy,
   replyToReviews,
@@ -114,7 +113,6 @@ interface GameStore {
   importDishes(dishes: Dish[]): void;
   stopListToggle(dishId: string): void;
   purchase(items: { ingredientId: string; quantity: number }[], urgent: boolean): void;
-  autoOrder(days: number): void;
   autoPurchaseSet(enabled: boolean, coverDays: number): void;
   hire(roleId: Parameters<typeof hireStaff>[1], count: number): void;
   fire(roleId: Parameters<typeof fireStaff>[1], count: number): void;
@@ -325,7 +323,6 @@ export const useGame = create<GameStore>((set, get) => ({
   importDishes: (dishes) => get().apply((st) => importCustomDishes(st, dishes)),
   stopListToggle: (dishId) => get().apply((st) => toggleStopList(st, dishId)),
   purchase: (items, urgent) => get().apply((st) => purchaseIngredients(st, items, urgent)),
-  autoOrder: (days) => get().apply((st) => autoOrderAction(st, days)),
   autoPurchaseSet: (enabled, coverDays) => get().apply((st) => setAutoPurchase(st, enabled, coverDays)),
   hire: (roleId, count) => get().apply((st) => hireStaff(st, roleId, count)),
   fire: (roleId, count) => get().apply((st) => fireStaff(st, roleId, count)),

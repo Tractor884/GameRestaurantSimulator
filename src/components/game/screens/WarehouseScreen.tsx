@@ -1,6 +1,7 @@
 /**
  * Экран «Склад» (ТЗ §18): остатки по категориям, сроки годности,
- * закупка (обычная/срочная), автозаказ, ожидаемые поставки.
+ * ручная закупка (обычная/срочная), ежедневный автозаказ завхоза,
+ * ожидаемые поставки.
  */
 'use client';
 
@@ -27,7 +28,6 @@ import {
   Clock,
   Trash2,
   Truck,
-  ShoppingCart,
   Zap,
   ChevronDown,
   Sparkles,
@@ -50,7 +50,6 @@ export function WarehouseScreen() {
   const state = useGame((s) => s.state)!;
   const restaurant = state.restaurant!;
   const purchase = useGame((s) => s.purchase);
-  const autoOrder = useGame((s) => s.autoOrder);
   const autoPurchaseSet = useGame((s) => s.autoPurchaseSet);
   const procurementSet = useGame((s) => s.procurementSet);
   const disabled = state.phase === 'gameover';
@@ -238,28 +237,9 @@ export function WarehouseScreen() {
         )}
       </SectionCard>
 
-      {/* Автозаказ */}
+      {/* Автозаказ (ежедневная модель завхоза) */}
       <SectionCard title="Автозаказ" icon={Sparkles}>
-        <div className="flex flex-wrap items-center gap-3">
-          <p className="text-sm text-stone-600 flex-1 min-w-[220px]">
-            Считает потребность по блюдам в меню и средним продажам, докупает ровно на указанный
-            горизонт. Заказ придёт завтра по ценам режима закупки (сейчас ×{PROCUREMENT.priceMult[policy]}).
-          </p>
-          <Button
-            variant="outline"
-            className="h-11 border-stone-300"
-            onClick={() => autoOrder(3)}
-            disabled={disabled}
-          >
-            <ShoppingCart className="h-4 w-4 mr-1.5" aria-hidden />
-            Автозаказ на 3 дня
-          </Button>
-          <Button className="h-11 bg-amber-600 hover:bg-amber-700 text-white" onClick={() => autoOrder(7)} disabled={disabled}>
-            <ShoppingCart className="h-4 w-4 mr-1.5" aria-hidden />
-            Автозаказ на 7 дней
-          </Button>
-        </div>
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-stone-50 p-3 mt-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-stone-200 bg-stone-50 p-3">
           <div className="flex items-center gap-3">
             <Switch
               id="auto-purchase"
@@ -271,10 +251,11 @@ export function WarehouseScreen() {
               Дозакупка каждое утро (модель завхоза)
             </Label>
           </div>
-          <p className="text-xs text-stone-500 max-w-[380px]">
+          <p className="text-xs text-stone-500 max-w-[440px]">
             Пополнение склада на старте каждого дня: цель покрытия {coverTarget} дн. — из режима закупки
             ({PROC_LABELS[policy].title.toLowerCase()}), скоропорт — по сроку годности, оплата при заказе,
-            доставка на следующее утро.
+            доставка на следующее утро по ценам ×{PROCUREMENT.priceMult[policy]}. Разовая закупка вручную —
+            в «Остатках и закупке» ниже.
           </p>
         </div>
       </SectionCard>
@@ -286,7 +267,7 @@ export function WarehouseScreen() {
         right={<CsvReportTools />}
       >
         {rows.length === 0 ? (
-          <EmptyState text="Склад пуст — сделайте автозаказ или купите продукты вручную" />
+          <EmptyState text="Склад пуст — включите дозакупку каждое утро или купите продукты вручную ниже" />
         ) : (
           <div className="space-y-2">
             {grouped.map((group) => (

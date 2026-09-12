@@ -29,7 +29,6 @@ export {
   buyAlcoholLicense,
   repayLoan,
   resolveEvent,
-  autoOrderAction,
   setAutoPurchase,
   setProcurementPolicy,
   replyToReviews,

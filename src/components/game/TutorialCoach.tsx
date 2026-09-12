@@ -4,16 +4,20 @@
  * ДВА СЛОЯ ПОДСКАЗОК:
  *  1. ПОШАГОВЫЙ ТУТОРИАЛ (недели 1–8): вводные советы — куда смотреть
  *     и что попробовать (склад → графики → маркетинг → P&L → отзывы →
- *     кредит → BSC). Прогресс в localStorage (`tutorial-step`), не в сейве:
- *     это мета-информация игрока, не состояние ресторана.
+ *     кредит → BSC). Шаги привязаны к ДНЯМ ИГРЫ и сменяются САМИ по мере
+ *     того, как игрок проживает дни: календарь — главный двигатель
+ *     прогресса. Кнопка «Понятно» прячет текущий шаг до времени
+ *     следующего (или сразу показывает его, если его день уже настал).
+ *     Прогресс в localStorage (`tutorial-step`), не в сейве: это
+ *     мета-информация игрока, не состояние ресторана.
  *  2. КОНТЕКСТНЫЕ СОВЕТЫ (приоритет над туториалом): реакция на живое
  *     состояние — Food Cost выше 36%, касса ниже 1.5 млн, рейтинг ниже 3.8,
  *     стоп-лист, усталость, очередь. Каждый совет = конкретный рецепт.
  *
  * Показывается ТОЛЬКО на главном экране. Скрытие шага — кнопкой «Понятно»
- * (следующий шаг придёт на своей неделе). Контекстные советы возвращаются,
+ * (следующий шаг придёт в свой день). Контекстные советы возвращаются,
  * пока проблема не решена (не глушатся навсегда, но не чаще раза в сессию —
- * флаг в localStorage со датой дня игры).
+ * флаг в localStorage со днём игры).
  */
 'use client';
 
@@ -32,22 +36,23 @@ interface Tip {
   action?: { label: string; screen: ScreenId };
 }
 
-/** Пошаговый туториал: неделя → совет (аудит №15 «режим первых 4 недель»).
+/** Пошаговый туториал: день игры → совет (аудит №15 «режим первых 4 недель»).
+ * `day` — сколько дней прожито к моменту показа шага (0 = сразу после старта).
  * «{{goals}}» в первом шаге подставляется из условий победы ТЕКУЩЕЙ сложности. */
-const STEPS: { week: number; tip: Tip }[] = [
+const STEPS: { day: number; tip: Tip }[] = [
   {
-    week: 1,
+    day: 0,
     tip: {
       id: 't-start',
       title: 'Добро пожаловать за руль ресторана!',
       tone: 'tutorial',
       body:
-        'Цель года: {{goals}}. Каждое нажатие «День» проживает день с 8:00 до 23:00: спрос → очередь → заказы → кухня → выручка. «Неделя» прогоняет 7 дней разом. Начните с кнопки «День» и смотрите, как идёт первый день.',
+        'Цель года: {{goals}}. Каждое нажатие «День» проживает день с 8:00 до 23:00: спрос → очередь → заказы → кухня → выручка. «Неделя» прогоняет 7 дней разом. Начните с кнопки «День» и смотрите, как идёт первый день. Советы управляющего будут сменяться сами по мере игры.',
       action: { label: 'Жмите «День» в верхней панели', screen: 'restaurant' },
     },
   },
   {
-    week: 1,
+    day: 2,
     tip: {
       id: 't-warehouse',
       title: 'Склад — сердце кухни',
@@ -58,7 +63,7 @@ const STEPS: { week: number; tip: Tip }[] = [
     },
   },
   {
-    week: 2,
+    day: 7,
     tip: {
       id: 't-schedule',
       title: 'График: найдите лишние смены',
@@ -69,7 +74,7 @@ const STEPS: { week: number; tip: Tip }[] = [
     },
   },
   {
-    week: 2,
+    day: 9,
     tip: {
       id: 't-marketing',
       title: 'Первый маркетинг',
@@ -80,7 +85,7 @@ const STEPS: { week: number; tip: Tip }[] = [
     },
   },
   {
-    week: 3,
+    day: 14,
     tip: {
       id: 't-pnl',
       title: 'Прибыль ≠ деньги: читайте P&L',
@@ -91,7 +96,7 @@ const STEPS: { week: number; tip: Tip }[] = [
     },
   },
   {
-    week: 4,
+    day: 21,
     tip: {
       id: 't-reviews',
       title: 'Рейтинг лечится сервисом',
@@ -102,7 +107,7 @@ const STEPS: { week: number; tip: Tip }[] = [
     },
   },
   {
-    week: 6,
+    day: 35,
     tip: {
       id: 't-loan',
       title: 'Кредит давит — планируйте',
@@ -113,7 +118,7 @@ const STEPS: { week: number; tip: Tip }[] = [
     },
   },
   {
-    week: 8,
+    day: 49,
     tip: {
       id: 't-bsc',
       title: 'BSC — термометр ресторана',
@@ -124,6 +129,9 @@ const STEPS: { week: number; tip: Tip }[] = [
     },
   },
 ];
+
+/** Туториал завершается сам к 10-й неделе: дальше работают Академия и алерты. */
+const TUTORIAL_END_DAY = 63;
 
 const STEP_STORAGE = 'rest-sim-tutorial-step';
 const ALERT_STORAGE = 'rest-sim-tutorial-alert-day';
@@ -143,14 +151,25 @@ function saveStep(step: number): void {
   }
 }
 
+/** «со 3-го дня» / «с 2-й недели» — человекочитаемая метка дня шага
+ *  относительно текущего прогресса (шаг той же недели — днём, будущей — неделей). */
+function dayLabel(day: number, daysPlayed: number): string {
+  const week = Math.floor(day / 7) + 1;
+  const curWeek = Math.floor(daysPlayed / 7) + 1;
+  return week <= curWeek ? `со ${day + 1}-го дня` : `с ${week}-й недели`;
+}
+
 export function TutorialCoach() {
   const state = useGame((s) => s.state)!;
   const setScreen = useGame((s) => s.setScreen);
-  const [hidden, setHidden] = useState(false);
+  /** id скрытого «Понятно» совета: окно возвращается, когда придёт СЛЕДУЮЩИЙ шаг. */
+  const [hiddenId, setHiddenId] = useState<string | null>(null);
   const [step, setStep] = useState<number>(() => loadStep());
 
   const restaurant = state.restaurant;
   const lastWeek = state.history.weekStats[state.history.weekStats.length - 1];
+  /** Прожито дней: (неделя − 1) × 7 + день (day 0..6 = следующий к прожитию). */
+  const daysPlayed = (state.week - 1) * 7 + state.day;
 
   /** Цели текущей сложности (плейсхолдер {{goals}} первого шага). */
   const goalText = useMemo(() => {
@@ -162,11 +181,10 @@ export function TutorialCoach() {
   /** Контекстные советы: приоритет над туториалом (проблема важнее вводных). */
   const alert = useMemo<Tip | null>(() => {
     if (!restaurant || !lastWeek) return null;
-    const dayIdx = state.week * 7 + state.day;
     // Не чаще одного алерта в игровой день.
     try {
       const lastAlertDay = window.localStorage.getItem(ALERT_STORAGE);
-      if (lastAlertDay === String(dayIdx)) return null;
+      if (lastAlertDay === String(daysPlayed)) return null;
     } catch {
       /* ignore */
     }
@@ -218,34 +236,50 @@ export function TutorialCoach() {
       };
     }
     return null;
-  }, [restaurant, lastWeek, state.week, state.day]);
+  }, [restaurant, lastWeek, daysPlayed]);
 
-  /** Текущий шаг туториала: первый непройденный, чья неделя уже наступила. */
-  const tutorialTip = useMemo<Tip | null>(() => {
-    for (let i = Math.min(step, STEPS.length - 1); i < STEPS.length; i++) {
-      if (STEPS[i].week <= state.week) return STEPS[i].tip;
+  /** Календарный шаг: последний, чей день уже прожит (главный двигатель
+   *  прогресса — советы сменяются сами, без нажатий). */
+  const calendarIdx = useMemo(() => {
+    let idx = -1;
+    for (let i = 0; i < STEPS.length; i++) {
+      if (STEPS[i].day <= daysPlayed) idx = i;
+      else break;
     }
-    return null;
-  }, [step, state.week]);
+    return idx;
+  }, [daysPlayed]);
+
+  /** Текущий шаг туториала. Правила:
+   *  − календарь опережает ручной прогресс → показываем шаг календаря;
+   *  − игрок закрыл шаг раньше времени → ждём день следующего шага;
+   *  − все шаги пройдены или туториал «постарел» → советы заканчиваются. */
+  const tutorialTip = useMemo<Tip | null>(() => {
+    if (daysPlayed >= TUTORIAL_END_DAY) return null;
+    const idx = Math.max(step, calendarIdx);
+    if (idx >= STEPS.length) return null;
+    if (idx > calendarIdx) return null;
+    return STEPS[idx].tip;
+  }, [step, calendarIdx, daysPlayed]);
 
   if (state.phase === 'gameover') return null;
   const tip = alert ?? tutorialTip;
-  if (!tip || hidden) return null;
+  if (!tip || tip.id === hiddenId) return null;
   const tipBody = tip.body.replace('{{goals}}', goalText);
 
   const isTutorial = tip.tone === 'tutorial';
   const stepNumber = STEPS.findIndex((s) => s.tip.id === tip.id) + 1;
+  const nextStep = stepNumber > 0 && stepNumber < STEPS.length ? STEPS[stepNumber] : null;
 
   const dismiss = () => {
-    setHidden(true);
-    if (alert) {
+    setHiddenId(tip.id);
+    if (tip.tone === 'warning') {
       try {
-        window.localStorage.setItem(ALERT_STORAGE, String(state.week * 7 + state.day));
+        window.localStorage.setItem(ALERT_STORAGE, String(daysPlayed));
       } catch {
         /* ignore */
       }
     } else {
-      const next = Math.max(step + 1, STEPS.findIndex((s) => s.tip.id === tip.id) + 1);
+      const next = Math.max(step, stepNumber);
       setStep(next);
       saveStep(next);
     }
@@ -254,6 +288,7 @@ export function TutorialCoach() {
   return (
     <section
       aria-label="Совет управляющего"
+      aria-live="polite"
       className={cn(
         'relative rounded-xl border p-4 sm:p-5 shadow-sm',
         isTutorial
@@ -309,7 +344,7 @@ export function TutorialCoach() {
       </div>
 
       {isTutorial && (
-        <div className="mt-3 flex items-center gap-1.5 pl-12" aria-hidden>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 pl-12" aria-hidden>
           {STEPS.map((s, i) => (
             <span
               key={s.tip.id}
@@ -319,6 +354,11 @@ export function TutorialCoach() {
               )}
             />
           ))}
+          {nextStep && (
+            <span className="ml-1 text-[10px] text-stone-400">
+              дальше — шаг {stepNumber + 1} {dayLabel(nextStep.day, daysPlayed)}
+            </span>
+          )}
         </div>
       )}
     </section>
