@@ -107,8 +107,9 @@ export function StaffScreen() {
 
   return (
     <div className="space-y-4">
-      {/* Персонаж зоны (PRESENTATION-LAYER §5): Анна + контент справа */}
-      <div className="grid gap-4 items-start lg:grid-cols-[280px,1fr]">
+      {/* Персонаж зоны (PRESENTATION-LAYER §5): Анна + контент справа.
+          Колонка шире (320/360) — портрет-герой занимает её целиком. */}
+      <div className="grid gap-4 items-start lg:grid-cols-[320px_1fr] xl:grid-cols-[360px_1fr]">
         <CharacterPanel characterId="hr" vertical />
         <div className="space-y-4 min-w-0">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

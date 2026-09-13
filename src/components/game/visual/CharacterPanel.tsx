@@ -3,8 +3,10 @@
  * ПАНЕЛЬ ПЕРСОНАЖА (PRESENTATION-LAYER.md §4–§5)
  * ============================================================================
  * Портрет + имя/роль + реплика + мини-KPI зоны (значения из state).
- * Вставляется сверху пилотных экранов: grid lg:grid-cols-[280px,1fr]
- * (на мобиле — сверху). Существующие таблицы/KPI НЕ удаляются.
+ * Вставляется сверху пилотных экранов: grid lg:grid-cols-[320px_1fr]
+ * xl:grid-cols-[360px_1fr] (на мобиле — сверху). Существующие таблицы/KPI НЕ удаляются.
+ * Вертикальный режим (все экраны персонажей): «геройный» портрет-квадрат
+ * на всю ширину колонки (мобайл: 3/5 ширины) — заметная часть экрана.
  *
  * АНИМАЦИИ (рекомендация №1): рамка панели и бейдж настроения — плавный
  * transition-colors 300ms; точка-индикатор при critical — короткий
@@ -143,16 +145,24 @@ export function CharacterPanel({
   return (
     <div
       className={cn(
-        'rounded-xl border bg-white p-3 shadow-sm transition-colors duration-300',
+        'rounded-xl border bg-white shadow-sm transition-colors duration-300',
+        vertical ? 'flex flex-col items-center p-4 text-center' : 'flex gap-3 p-3',
         ui.border,
-        vertical ? 'flex flex-col items-center text-center' : 'flex gap-3',
       )}
     >
-      <CharacterPortrait characterId={characterId} mood={mood} size={size} />
+      {vertical ? (
+        /* «Геройный» портрет: на десктопе занимает всю колонку (320–360px),
+           на планшете половину, на мобиле 3/5 — заметная часть экрана. */
+        <div className="mx-auto w-3/5 sm:w-1/2 lg:w-full">
+          <CharacterPortrait characterId={characterId} mood={mood} fluid />
+        </div>
+      ) : (
+        <CharacterPortrait characterId={characterId} mood={mood} size={size} />
+      )}
       <div className={cn('min-w-0 flex-1 flex flex-col', vertical && 'mt-3 w-full items-center')}>
         <div className={cn('flex w-full items-start justify-between gap-2', vertical && 'justify-center')}>
           <div className={cn('min-w-0', vertical && 'text-center')}>
-            <p className="font-bold text-stone-900 leading-tight">{meta.name}</p>
+            <p className={cn('font-bold text-stone-900 leading-tight', vertical && 'text-lg')}>{meta.name}</p>
             <p className="text-xs text-stone-500">{meta.role}</p>
           </div>
           <span

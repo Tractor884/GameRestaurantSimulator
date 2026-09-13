@@ -31,10 +31,12 @@ export interface CharacterPortraitProps {
   mood: Mood;
   /** px базового размера (плейсхолдер и кольцо масштабируются). */
   size?: number;
+  /** Жидкий режим: квадрат на всю ширину родителя (size игнорируется) — «геройный» портрет в колонке экрана. */
+  fluid?: boolean;
   className?: string;
 }
 
-export function CharacterPortrait({ characterId, mood, size = 128, className }: CharacterPortraitProps) {
+export function CharacterPortrait({ characterId, mood, size = 128, fluid = false, className }: CharacterPortraitProps) {
   const meta = CHARACTER_META[characterId];
   const urls = useArtStore((s) => s.urls);
   const builtin = useGame((s) => s.state?.options?.builtinIllustrations ?? false);
@@ -50,8 +52,8 @@ export function CharacterPortrait({ characterId, mood, size = 128, className }: 
 
   return (
     <div
-      className={cn('relative shrink-0 select-none', className)}
-      style={{ width: size, height: size }}
+      className={cn('relative shrink-0 select-none', fluid && 'aspect-square w-full', className)}
+      style={fluid ? undefined : { width: size, height: size }}
       role="img"
       aria-label={`${meta.name}, ${meta.role}: ${ui.label}`}
     >
@@ -77,8 +79,8 @@ export function CharacterPortrait({ characterId, mood, size = 128, className }: 
               <img
                 src={src!}
                 alt={`${meta.name}, ${meta.role}`}
-                width={size}
-                height={size}
+                width={fluid ? undefined : size}
+                height={fluid ? undefined : size}
                 loading="lazy"
                 decoding="async"
                 className="h-full w-full rounded-2xl object-cover bg-stone-900"
@@ -97,7 +99,10 @@ export function CharacterPortrait({ characterId, mood, size = 128, className }: 
           aria-hidden={showImage}
         >
           <meta.icon className="h-[34%] w-[34%] text-stone-400" strokeWidth={1.5} />
-          <span className={cn('mt-1 font-bold leading-none', meta.colorClass)} style={{ fontSize: size * 0.26 }}>
+          <span
+            className={cn('mt-1 font-bold leading-none', meta.colorClass, fluid && 'text-5xl')}
+            style={fluid ? undefined : { fontSize: size * 0.26 }}
+          >
             {meta.name[0]}
           </span>
         </div>
