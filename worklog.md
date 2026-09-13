@@ -669,3 +669,20 @@ Stage Summary:
 - Движок не тронут: эталоны детерминизма сошлись байт-в-байт. Все анимации уважают prefers-reduced-motion; параллакс — только pointer:fine.
 - НОВЫЕ файлы: uiPrefs.ts, AchievementsWatcher.tsx, AnimatedProgress.tsx, visual/SceneParallax.tsx, TutorialSpotlight.tsx. ИЗМЕНЕНЫ: hints.tsx, widgets.tsx, GameShell.tsx, GoalsPanel.tsx, RestaurantScreen.tsx, AnalyticsScreen.tsx, SettingsScreen.tsx, StaffScreen.tsx, ScheduleScreen.tsx, TutorialCoach.tsx, visual/CharacterPanel.tsx, CharacterPortrait.tsx, VisualMessage.tsx, RestaurantScene.tsx, SceneLayer.tsx.
 - СЛЕДУЮЩИЕ КАНДИДАТЫ (не начаты): virtualization длинных списков (react-window) при росте данных; client-side UX-аналитика; релизный пакет (static export + PWA) — пользователь отложил («Пока не нужно»).
+
+---
+Task ID: 25 (консультация, без изменений кода)
+Agent: main
+Task: Расчёт ресурсов для размещения игры на собственном VPS пользователя (10-15 одновременных игроков). Пользователь явно попросил НЕ переписывать код пока.
+
+Work Log:
+- Замерены реальные размеры: public 3.3 МБ (19 артов), src 2 МБ, node_modules 1.2 ГБ (только для сборки, на VPS не нужен)
+- Подтверждено: next.config.ts уже output:"standalone", build-скрипт копирует static+public — продакшен готов без изменений кода
+- Рассчитаны требования для 10-15 игроков: 1 vCPU / 1 ГБ ОЗУ / 5-10 ГБ диск / ~1-5 ГБ трафика в месяц
+- Два режима: A) статика + nginx (512 МБ ОЗУ, нужен output:'export') и B) Node standalone (1 ГБ, ноль изменений кода)
+- QA-cron 382184 был отключён платформой (лимит запусков) — удалён и пересоздан как 382285
+
+Stage Summary:
+- Пользователь выбрал деплой на свой VPS, расчёты выданы. КОД НЕ ТРОГАТЬ до его команды
+- ВАЖНО для следующих агентов: НЕ переключать next.config на output:'export' и НЕ удалять API-роут без явной команды пользователя — он выбирает режим деплоя
+- Task 24 (UI/UX P1-P4 из обзора пользователя) остаётся следующим шагом — ждём команды либо делаем по частям после стабилизации
