@@ -5,11 +5,17 @@
  * Портрет + имя/роль + реплика + мини-KPI зоны (значения из state).
  * Вставляется сверху пилотных экранов: grid lg:grid-cols-[280px,1fr]
  * (на мобиле — сверху). Существующие таблицы/KPI НЕ удаляются.
+ *
+ * АНИМАЦИИ (рекомендация №1): рамка панели и бейдж настроения — плавный
+ * transition-colors 300ms; точка-индикатор при critical — короткий
+ * «тревожный» pulse (scale 1→1.02 + мягкое притухание, 1.2s, infinite).
+ * prefers-reduced-motion — всё статично, только цветовые переходы.
  */
 
 'use client';
 
 import { useMemo, type ReactNode } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import { useGame } from '@/lib/game/store/gameStore';
 import {
   getCharacterMood,
@@ -131,11 +137,13 @@ export function CharacterPanel({
   const ui = MOOD_UI[mood];
   const kpis = useMemo(() => zoneKpis(characterId), [state, characterId]);
   const size = compact ? 88 : 120;
+  const prefersReduced = useReducedMotion();
+  const critical = mood === 'critical' && !prefersReduced;
 
   return (
     <div
       className={cn(
-        'rounded-xl border bg-white p-3 shadow-sm',
+        'rounded-xl border bg-white p-3 shadow-sm transition-colors duration-300',
         ui.border,
         vertical ? 'flex flex-col items-center text-center' : 'flex gap-3',
       )}
@@ -148,10 +156,20 @@ export function CharacterPanel({
             <p className="text-xs text-stone-500">{meta.role}</p>
           </div>
           <span
-            className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold shrink-0', ui.bg, ui.text, vertical && 'ml-2')}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold shrink-0 transition-colors duration-300',
+              ui.bg,
+              ui.text,
+              vertical && 'ml-2',
+            )}
             title={`Состояние зоны: ${ui.label}`}
           >
-            <span className={cn('h-1.5 w-1.5 rounded-full', ui.dot)} aria-hidden />
+            <motion.span
+              className={cn('h-1.5 w-1.5 rounded-full transition-colors duration-300', ui.dot)}
+              aria-hidden
+              animate={critical ? { scale: [1, 1.02, 1], opacity: [1, 0.65, 1] } : { scale: 1, opacity: 1 }}
+              transition={critical ? { duration: 1.2, ease: 'easeInOut', repeat: Infinity } : { duration: 0.2, ease: 'easeOut' }}
+            />
             {ui.label}
           </span>
         </div>

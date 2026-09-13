@@ -41,11 +41,14 @@ import {
   Clock,
   ImageIcon,
   GraduationCap,
+  Rows3,
 } from 'lucide-react';
 
 import { GameOverDialog, FinalStatusBadge } from './GameOverDialog';
 import { EmergencyDialog } from './EmergencyDialog';
 import { MentorWidget } from './MentorWidget';
+import { AchievementsWatcher } from './AchievementsWatcher';
+import { useUiPrefs } from '@/lib/game/store/uiPrefs';
 import { useArtStore } from '@/lib/game/presentation/artState';
 import dynamic from 'next/dynamic';
 import { RestaurantScreen } from './screens/RestaurantScreen';
@@ -189,6 +192,8 @@ export function GameShell() {
   const state = useGame((s) => s.state);
   const screen = useGame((s) => s.screen);
   const setScreen = useGame((s) => s.setScreen);
+  const density = useUiPrefs((s) => s.density);
+  const toggleDensity = useUiPrefs((s) => s.toggleDensity);
   const runDay = useGame((s) => s.runDay);
   const runWeek = useGame((s) => s.runWeek);
   const busy = useGame((s) => s.busy);
@@ -316,6 +321,34 @@ export function GameShell() {
           {/* Наставник: контекстная подсказка по живым KPI (рекомендация №2) */}
           <MentorWidget />
 
+          {/* Достижения: пассивный наблюдатель (тосты при выполнении условий, рекомендация №8); рендерит null */}
+          <AchievementsWatcher />
+
+          {/* Плотность информации «Новичок/Эксперт» (UI/UX №5): быстрый переключатель (сама настройка — в «Настройках») */}
+          <button
+            type="button"
+            onClick={toggleDensity}
+            title={
+              density === 'novice'
+                ? 'Режим «Новичок»: только ключевые KPI. Нажмите, чтобы включить «Эксперт» (все метрики и мини-графики)'
+                : 'Режим «Эксперт»: все метрики и мини-графики. Нажмите, чтобы вернуться к «Новичку»'
+            }
+            aria-label={`Плотность информации: ${density === 'novice' ? 'новичок' : 'эксперт'} (переключить)`}
+            aria-pressed={density === 'expert'}
+            className={cn(
+              'hidden sm:inline-flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400',
+              density === 'expert'
+                ? 'border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200'
+                : 'border-stone-200 bg-white text-stone-500 hover:text-stone-800 hover:border-stone-300',
+            )}
+          >
+            <Rows3
+              className={cn('h-3.5 w-3.5', density === 'expert' ? 'text-amber-600' : 'text-stone-400')}
+              aria-hidden
+            />
+            <span className="hidden lg:inline">{density === 'novice' ? 'Новичок' : 'Эксперт'}</span>
+          </button>
+
           {/* Мини-виджеты */}
           <div className="hidden md:flex items-center gap-4 text-sm">
             <div className="flex items-center gap-1.5" title="Деньги на счёте">
@@ -363,6 +396,7 @@ export function GameShell() {
                   variant="outline"
                   size="sm"
                   className="border-stone-300 active:scale-[0.98]"
+                  data-tutorial="day-btn"
                 >
                   {busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" aria-hidden /> : <Play className="h-4 w-4 mr-1" aria-hidden />}
                   День
@@ -372,6 +406,7 @@ export function GameShell() {
                   disabled={busy}
                   size="sm"
                   className="bg-amber-600 hover:bg-amber-700 text-white active:scale-[0.98]"
+                  data-tutorial="week-btn"
                 >
                   {busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" aria-hidden /> : <FastForward className="h-4 w-4 mr-1" aria-hidden />}
                   Неделя
@@ -402,6 +437,7 @@ export function GameShell() {
                 {group.items.map((item) => (
                   <button
                     key={item.id}
+                    data-tutorial={`nav-${item.id}`}
                     onClick={() => {
                       setScreen(item.id);
                       setNavOpen(false);

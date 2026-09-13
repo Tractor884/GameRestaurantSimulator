@@ -9,11 +9,19 @@
  * Без арта сцена остаётся информативной: схематичные зоны ANCHOR-GRID +
  * чипы состояния. Загруженные/встроенные картинки укладываются в те же
  * якоря (ПРИОРИТЕТ: своя загрузка → встроенная → схемка).
+ *
+ * ПАРАЛЛАКС (рекомендация №2): SceneParallax — pointer-параллакс
+ * (desktop pointer: fine, prefers-reduced-motion — выкл): база ±2px,
+ * дальние слои ±4px (кухня/кофе), средние ±6–7px (гости/предписание),
+ * передние ±8–10px (очередь, пол, посуда, спрайты смены); плоскость сцены
+ * наклоняется ≤2° (perspective 800). Якоря/координаты НЕ тронуты —
+ * параллакс только transform; строка индикаторов — статична (читаемость).
  */
 
 'use client';
 
 import { useMemo } from 'react';
+import { motion } from 'framer-motion';
 import { useGame } from '@/lib/game/store/gameStore';
 import { useArtStore, resolveArt } from '@/lib/game/presentation/artState';
 import { getRestaurantVisualState } from '@/lib/game/presentation';
@@ -21,6 +29,7 @@ import type { Mood, QueueLevel } from '@/lib/game/presentation/types';
 import type { RoleId } from '@/lib/game/types';
 import { SceneLayer, ANCHORS } from './SceneLayer';
 import { GuestSprites } from './GuestSprites';
+import { ParallaxLayer, SceneParallax, SceneTilt, useSceneParallaxTransform } from './SceneParallax';
 import { cn } from '@/lib/utils';
 import {
   Users,
@@ -50,9 +59,11 @@ function StaffSprite({ roleId, mood, style }: { roleId: RoleId; mood: Mood; styl
     mood === 'great' ? 'ring-emerald-400' : mood === 'warning' ? 'ring-amber-400' : mood === 'critical' ? 'ring-red-400' : 'ring-stone-300';
   const tone =
     mood === 'great' ? 'text-emerald-300' : mood === 'warning' ? 'text-amber-300' : mood === 'critical' ? 'text-red-300' : 'text-stone-300';
+  // Параллакс переднего плана: ±9px, координаты style не меняются.
+  const { x, y } = useSceneParallaxTransform(9);
 
   return (
-    <div className="absolute pointer-events-none" style={style} aria-hidden>
+    <motion.div className="absolute pointer-events-none" style={{ ...style, x, y }} aria-hidden>
       {src ? (
          
         <img src={src} alt={meta.ru} loading="lazy" decoding="async" className="h-full w-full object-contain drop-shadow-lg" />
@@ -64,7 +75,7 @@ function StaffSprite({ roleId, mood, style }: { roleId: RoleId; mood: Mood; styl
           <span className="rounded-full bg-stone-900/70 px-1.5 text-[9px] text-stone-300 backdrop-blur-sm">{meta.ru}</span>
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }
 
@@ -184,54 +195,78 @@ export function RestaurantScene() {
 
   return (
     <div className="space-y-2">
-      <div
+      <SceneParallax
         className="relative aspect-[7/4] w-full overflow-hidden rounded-xl border border-stone-300 shadow-inner"
         role="img"
         aria-label={`Сцена зала: ${QUEUE_RU[visual.queue]}, чистота ${cleanliness.toFixed(0)}/100, гости ${visual.guestMood === 'happy' ? 'довольны' : visual.guestMood === 'unhappy' ? 'недовольны' : 'нейтральны'}`}
       >
-        {baseSrc ? (
-           
-          <img src={baseSrc} alt="Зал ресторана" className="absolute inset-0 h-full w-full object-cover" />
-        ) : (
-          <SchematicBase />
-        )}
+        {/* Плоскость сцены: лёгкий 3D-наклон ≤2° (perspective 800 на контейнере). */}
+        <SceneTilt className="absolute inset-0 will-change-transform">
+          {/* База: почти статична (±2px), overscale 1.04 прячет щели наклона. */}
+          <ParallaxLayer depth={2} className="absolute inset-0" style={{ scale: 1.04 }}>
+            {baseSrc ? (
+              
+              <img src={baseSrc} alt="Зал ресторана" className="absolute inset-0 h-full w-full object-cover" />
+            ) : (
+              <SchematicBase />
+            )}
+          </ParallaxLayer>
 
-        {/* Слои состояния (есть картинка — показываем; нет — чип ниже). */}
-        {queueLayerKey && <SceneLayer src={layer(queueLayerKey)} anchor={ANCHORS.entrance} alt="Очередь" />}
-        {visual.notice !== 'none' && (
-          <SceneLayer src={layer('objects/penalty_notice')} anchor={{ x: 84, y: 62, w: 10, h: 14 }} alt="Предписание" />
-        )}
-        {visual.floor !== 'off' && (
-          <SceneLayer src={layer('objects/floor_dirty')} anchor={ANCHORS['floor-front']} opacity={floorOpacity} alt="Грязный пол" />
-        )}
-        {visual.dishes === 'on' && <SceneLayer src={layer('objects/dirty_dishes')} anchor={{ x: 4, y: 28, w: 14, h: 12 }} alt="Гора посуды" />}
-        {visual.coffee !== 'ok' && (
-          <SceneLayer src={layer(visual.coffee === 'broken' ? 'objects/coffee_broken' : 'objects/coffee_warning')} anchor={ANCHORS['coffee-station']} alt="Кофемашина" />
-        )}
-        {visual.kitchen !== 'off' && (
-          <SceneLayer src={layer(visual.kitchen === 'heavy' ? 'objects/kitchen_smoke' : 'objects/kitchen_steam')} anchor={{ x: 10, y: 2, w: 42, h: 16 }} opacity={visual.kitchen === 'heavy' ? 1 : 0.8} alt="Пар над кухней" />
-        )}
+          {/* Слои состояния (есть картинка — показываем; нет — чип ниже). */}
+          {queueLayerKey && <SceneLayer src={layer(queueLayerKey)} anchor={ANCHORS.entrance} depth={10} alt="Очередь" />}
+          {visual.notice !== 'none' && (
+            <SceneLayer src={layer('objects/penalty_notice')} anchor={{ x: 84, y: 62, w: 10, h: 14 }} depth={7} alt="Предписание" />
+          )}
+          {visual.floor !== 'off' && (
+            <SceneLayer src={layer('objects/floor_dirty')} anchor={ANCHORS['floor-front']} opacity={floorOpacity} depth={9} alt="Грязный пол" />
+          )}
+          {visual.dishes === 'on' && (
+            <SceneLayer src={layer('objects/dirty_dishes')} anchor={{ x: 4, y: 28, w: 14, h: 12 }} depth={8} alt="Гора посуды" />
+          )}
+          {visual.coffee !== 'ok' && (
+            <SceneLayer
+              src={layer(visual.coffee === 'broken' ? 'objects/coffee_broken' : 'objects/coffee_warning')}
+              anchor={ANCHORS['coffee-station']}
+              depth={4}
+              alt="Кофемашина"
+            />
+          )}
+          {visual.kitchen !== 'off' && (
+            <SceneLayer
+              src={layer(visual.kitchen === 'heavy' ? 'objects/kitchen_smoke' : 'objects/kitchen_steam')}
+              anchor={{ x: 10, y: 2, w: 42, h: 16 }}
+              opacity={visual.kitchen === 'heavy' ? 1 : 0.8}
+              depth={4}
+              alt="Пар над кухней"
+            />
+          )}
 
-        {/* Гости у столов (топ-сегменты дня). */}
-        <div className="absolute" style={{ left: '10%', top: '42%', width: '54%', height: '30%' }} aria-hidden>
-          <GuestSprites segments={visual.guestSegments} mood={visual.guestMood} />
-        </div>
+          {/* Гости у столов (топ-сегменты дня): средний план ±7px. */}
+          <ParallaxLayer
+            depth={7}
+            className="absolute"
+            style={{ left: '10%', top: '42%', width: '54%', height: '30%' }}
+            aria-hidden
+          >
+            <GuestSprites segments={visual.guestSegments} mood={visual.guestMood} />
+          </ParallaxLayer>
 
-        {/* Смена в зале: официант у столов, хостес у входа. */}
-        {visual.staff.map((s) => (
-          <StaffSprite
-            key={s.roleId}
-            roleId={s.roleId}
-            mood={s.mood}
-            style={
-              s.roleId === 'waiter'
-                ? { left: '68%', top: '52%', width: '10%', height: '22%' }
-                : { left: '76%', top: '74%', width: '9%', height: '20%' }
-            }
-          />
-        ))}
+          {/* Смена в зале: официант у столов, хостес у входа (передний план, ±9px внутри StaffSprite). */}
+          {visual.staff.map((s) => (
+            <StaffSprite
+              key={s.roleId}
+              roleId={s.roleId}
+              mood={s.mood}
+              style={
+                s.roleId === 'waiter'
+                  ? { left: '68%', top: '52%', width: '10%', height: '22%' }
+                  : { left: '76%', top: '74%', width: '9%', height: '20%' }
+              }
+            />
+          ))}
+        </SceneTilt>
 
-        {/* Строка индикаторов (числа всегда видны). */}
+        {/* Строка индикаторов (числа всегда видны) — статична, вне наклона. */}
         <div className="absolute inset-x-2 bottom-2 flex flex-wrap items-center gap-1.5">
           <SceneChip
             icon={Users}
@@ -260,7 +295,7 @@ export function RestaurantScene() {
             />
           )}
         </div>
-      </div>
+      </SceneParallax>
       <p className="text-[11px] text-stone-400">
         Сцена показывает состояние, а не время. Иллюстрации — в разделе «Иллюстрации»: загрузите свои картинки для каждой зоны.
       </p>

@@ -6,6 +6,7 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { useGame, type SaveMeta } from '@/lib/game/store/gameStore';
+import { useUiPrefs } from '@/lib/game/store/uiPrefs';
 import { SectionCard, money, moneyShort } from '../widgets';
 import { difficultyWin as winOf, difficultyOf as diffOf } from '@/lib/game/config/difficulty.config';
 import { Button } from '@/components/ui/button';
@@ -34,6 +35,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   Siren,
+  Gauge,
 } from 'lucide-react';
 
 export function SettingsScreen() {
@@ -47,6 +49,8 @@ export function SettingsScreen() {
   const resetGame = useGame((s) => s.resetGame);
   const setOption = useGame((s) => s.setOption);
   const middayPause = state.options?.middayPause ?? true;
+  const density = useUiPrefs((s) => s.density);
+  const setDensity = useUiPrefs((s) => s.setDensity);
 
   const [refresh, setRefresh] = useState(0);
   const [importError, setImportError] = useState<string | null>(null);
@@ -79,6 +83,49 @@ export function SettingsScreen() {
 
   return (
     <div className="space-y-4">
+      {/* Интерфейс: плотность информации (UI/UX-рекомендация №5) */}
+      <SectionCard title="Интерфейс" icon={Gauge}>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-stone-800">Плотность информации</p>
+            <p className="text-xs text-stone-500 mt-0.5 max-w-xl">
+              «Новичок» — только ключевые показатели (деньги, рейтинг, Food Cost, Labor Cost).
+              «Эксперт» — все метрики, мини-графики динамики и тренды. Настройка не влияет
+              на игру и сохраняется отдельно от сейвов.
+            </p>
+          </div>
+          <div
+            className="flex rounded-lg border border-stone-200 bg-stone-50 p-1 shrink-0"
+            role="radiogroup"
+            aria-label="Режим плотности интерфейса"
+          >
+            {(
+              [
+                { id: 'novice', label: 'Новичок', hint: '4 ключевых KPI' },
+                { id: 'expert', label: 'Эксперт', hint: 'все метрики + графики' },
+              ] as const
+            ).map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                role="radio"
+                aria-checked={density === mode.id}
+                title={mode.hint}
+                onClick={() => setDensity(mode.id)}
+                className={cn(
+                  'min-h-9 rounded-md px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400',
+                  density === mode.id
+                    ? 'bg-amber-100 text-amber-900 shadow-sm'
+                    : 'text-stone-500 hover:text-stone-800',
+                )}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </SectionCard>
+
       {/* Сохранения */}
       <SectionCard title="Сохранения" icon={Save}>
         <div className="grid md:grid-cols-3 gap-4">
