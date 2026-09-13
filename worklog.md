@@ -719,3 +719,24 @@ Work Log:
 Stage Summary:
 - Ждём «поехали» от пользователя. До этого код не трогать
 - После «поехали»: правка next.config (export, images unoptimized), удалить src/app/api, bun run build, проверить out/, упаковать, дать команды scp + nginx-блок + проверку
+
+---
+Task ID: 28 (деплой: подготовка статического пакета)
+Agent: main
+Task: По команде пользователя «Поехали» — переключить проект на статическую сборку и подготовить пакет для VPS (nginx, порт 8080, доступ по IP).
+
+Work Log:
+- Правки кода: next.config.ts output:"export" + images.unoptimized; package.json build упрощён до "next build"; удалён мёртвый src/app/api/route.ts; .gitignore: +public/deploy/ +/deploy-build/
+- ИНЦИДЕНТ: из-за запрета symlink в песочнице команда сборки провалилась на ln -s, а последующая rm-команда сработала в живом проекте и удалила game-art/_review и _prompts.md — восстановлены из git (git checkout), потерь нет. Урок: в песочнице НЕ использовать ln -s; всегда set -e и абсолютные пути
+- Создан scripts/build-static.sh: копия проекта в deploy-build/ (без node_modules — резолв поднимается вверх), чистка _review/_prompts из копии, node next build, проверка out/, tar.gz в public/deploy/ + VERSION-файл с хэшем коммита
+- Сборка: 12.9с, out/ 3.7 МБ (102 файла), архив restsim-game.tar.gz 1.6 МБ. Шрифты Geist подтянулись, TS-валидация скипнута по конфигу
+- Полный play-test СТАТИЧЕСКОЙ сборки (python http.server 8181 + agent-browser): мастер (7 шагов по умолчанию) -> «Открыть ресторан!» -> главный экран 16 разделов -> кнопка «День» -> автосейв rest-sim-autosave-v1 в localStorage. Ошибок страницы и консоли НЕТ. webp-иллюстрации не грузились только из-за опции builtinIllustrations:false в сейв-дефолтах — ассеты в архиве подтверждены
+- Dev-сервер после смены конфига перезапустился сам (Ready in 1764ms), игра в песочнице работает, agent-browser проверен мастер открытия
+- Архив отдаётся dev-сервером: GET /deploy/restsim-game.tar.gz -> 200, application/gzip
+- git: коммит c4d5ecd, push origin main
+
+Stage Summary:
+- Пакет готов, выданы пользователю инструкции: скачать архив через превью-панель (URL + /deploy/restsim-game.tar.gz), 7 команд на VPS (mkdir /var/www/restsim, wget, tar, nginx conf.d/restsim.conf на 8080, nginx -t, reload, curl ifconfig.me)
+- Будущие релизы: bash scripts/build-static.sh -> новый архив -> wget+tar на сервере (обновление поверх)
+- Запасной план: если хостер режет 8080 — отдавать игру по пути /game (потребуется basePath в next.config); если wget не проходит из-за авторизации превью — скачка в браузере + scp
+- Task 24 (UI/UX P1-P4) — следующий шаг после подтверждения деплоя пользователем
