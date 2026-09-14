@@ -71,8 +71,8 @@ export function EquipmentScreen() {
 
   return (
     <div className="space-y-4">
-      {/* Персонаж зоны (PRESENTATION-LAYER §5): Николай */}
-      <div className="grid gap-4 items-start lg:grid-cols-[280px,1fr]">
+      {/* Персонаж зоны (PRESENTATION-LAYER §5): Николай — колонка шире, портрет-герой */}
+      <div className="grid gap-4 items-start lg:grid-cols-[320px_1fr] xl:grid-cols-[360px_1fr]">
         <CharacterPanel characterId="technician" vertical />
         <div className="min-w-0 space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

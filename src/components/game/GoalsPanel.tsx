@@ -18,6 +18,7 @@ import { useGame } from '@/lib/game/store/gameStore';
 import { difficultyWin, difficultyOf } from '@/lib/game/config/difficulty.config';
 import { SectionCard } from './widgets';
 import { InfoHint } from './hints';
+import { AnimatedProgress } from './AnimatedProgress';
 import { cn } from '@/lib/utils';
 import { Trophy, CheckCircle2, Circle } from 'lucide-react';
 
@@ -129,7 +130,6 @@ export function GoalsPanel() {
     >
       <div className="space-y-2.5">
         {rows.map((r) => {
-          const pct = Math.round(Math.max(0, Math.min(1, r.progress)) * 100);
           return (
             <div key={r.key} className="flex items-center gap-2">
               {r.done ? (
@@ -145,20 +145,16 @@ export function GoalsPanel() {
                     <span className="text-stone-400"> / {r.target}</span>
                   </span>
                 </div>
-                <div className="mt-1 h-1.5 rounded-full bg-stone-100 overflow-hidden">
-                  <div
-                    className={cn(
-                      'h-full rounded-full transition-all duration-500',
-                      r.done ? 'bg-emerald-500' : pct >= 70 ? 'bg-amber-500' : 'bg-stone-400',
-                    )}
-                    style={{ width: `${pct}%` }}
-                    role="progressbar"
-                    aria-valuenow={pct}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-label={`${r.label}: ${r.value} из ${r.target}`}
-                  />
-                </div>
+                {/* Анимированный бар (UI/UX №7): логика расчёта строк выше НЕ изменена.
+                    done → emerald (галка в строке — как раньше); зоны ≥70/≥45/остальное. */}
+                <AnimatedProgress
+                  className="mt-1"
+                  value={r.progress}
+                  max={1}
+                  size="sm"
+                  done={r.done}
+                  ariaLabel={`${r.label}: ${r.value} из ${r.target}`}
+                />
               </div>
             </div>
           );

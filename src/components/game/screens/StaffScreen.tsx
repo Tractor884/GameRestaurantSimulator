@@ -13,6 +13,7 @@ import {
   MetricRow,
   ScoreBar,
   RangeBadge,
+  MoodBadge,
   WarningBanner,
   money,
   moneyShort,
@@ -162,8 +163,9 @@ export function StaffScreen() {
 
   return (
     <div className="space-y-4">
-      {/* Персонаж зоны (PRESENTATION-LAYER §5): Анна + контент справа */}
-      <div className="grid gap-4 items-start lg:grid-cols-[280px,1fr]">
+      {/* Персонаж зоны (PRESENTATION-LAYER §5): Анна + контент справа.
+          Колонка шире (320/360) — портрет-герой занимает её целиком. */}
+      <div className="grid gap-4 items-start lg:grid-cols-[320px_1fr] xl:grid-cols-[360px_1fr]">
         <CharacterPanel characterId="hr" vertical />
         <div className="space-y-4 min-w-0">
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -232,8 +234,10 @@ export function StaffScreen() {
         <div className="overflow-x-auto">
           <Table className="min-w-[860px]">
             <TableHeader>
-              <TableRow>
-                <TableHead className="w-[260px]">Роль</TableHead>
+              <TableRow className="group">
+                {/* Sticky-колонка «Роль» (мобайл 390px): bg обязателен, иначе
+                    прокручиваемые ячейки шлейфом просвечивают под колонкой. */}
+                <TableHead className="sticky left-0 z-10 bg-white group-hover:bg-stone-50 w-[260px]">Роль</TableHead>
                 <TableHead className="w-32 text-right">Оклад</TableHead>
                 <TableHead className="w-24 text-center">В штате</TableHead>
                 <TableHead className="w-40">Состояние</TableHead>
@@ -247,8 +251,27 @@ export function StaffScreen() {
                 const roleMood = getStaffRoleMood(state, roleId);
                 const roleUi = MOOD_UI[roleMood];
                 return (
-                  <TableRow key={roleId}>
-                    <TableCell>
+                  <TableRow
+                    key={roleId}
+                    className={cn(
+                      'group border-l-4 transition-colors',
+                      roleMood === 'critical'
+                        ? 'border-l-red-400 bg-red-50/30'
+                        : roleMood === 'warning'
+                          ? 'border-l-amber-400 bg-amber-50/20'
+                          : roleMood === 'great'
+                            ? 'border-l-emerald-400'
+                            : 'border-l-stone-200',
+                    )}
+                  >
+                    <TableCell
+                      className={cn(
+                        /* Тонировки строк (критично/внимание) — почти белые
+                           (/30, /20 поверх белой карточки): solid bg-white
+                           совпадает глазу и не даёт «шлейфа» при прокрутке. */
+                        'sticky left-0 z-10 bg-white group-hover:bg-stone-50',
+                      )}
+                    >
                       <p className="text-sm font-medium text-stone-800 flex items-center gap-1.5">
                         <span
                           className={cn('inline-block h-2 w-2 shrink-0 rounded-full', roleUi.dot)}
@@ -273,6 +296,7 @@ export function StaffScreen() {
                     </TableCell>
                     <TableCell>
                       <div className="space-y-2 w-36">
+                        <MoodBadge mood={roleMood} prefix="роль:" className="block w-fit" />
                         <FatigueBar value={pool.fatigue} />
                         <ScoreBar label="Мораль" value={pool.morale} hint="morale" />
                       </div>

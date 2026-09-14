@@ -18,15 +18,26 @@
  * (следующий шаг придёт в свой день). Контекстные советы возвращаются,
  * пока проблема не решена (не глушатся навсегда, но не чаще раза в сессию —
  * флаг в localStorage со днём игры).
+ *
+ * SPOTLIGHT (UI/UX №9): у шага может быть `target` — data-tutorial-якорь
+ * реального элемента интерфейса (кнопка «День» в топбаре, вкладка «Склад»,
+ * KPI-грид). Тогда вокруг цели рисуется тёмная маска с «дыркой» и янтарным
+ * кольцом (TutorialSpotlight), а карточка шага «прилипает» к цели (fixed).
+ * Цель не найдена/скрыта (напр., свёрнутое боковое меню на мобиле) — фолбэк:
+ * обычная карточка в потоке, как раньше. Календарь шагов (daysPlayed),
+ * логика «Понятно» и контекстные советы НЕ менялись — только визуальное
+ * усиление.
  */
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useGame, type ScreenId } from '@/lib/game/store/gameStore';
 import { difficultyWin } from '@/lib/game/config/difficulty.config';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { GraduationCap, X, Lightbulb, ChevronRight } from 'lucide-react';
+import { TutorialSpotlight, useTutorialTargetRect, type SpotlightRect } from './TutorialSpotlight';
 
 interface Tip {
   id: string;
@@ -34,11 +45,14 @@ interface Tip {
   body: string;
   tone: 'tutorial' | 'warning';
   action?: { label: string; screen: ScreenId };
+  /** data-tutorial-якорь подсветки (UI/UX №9). */
+  target?: string;
 }
 
 /** Пошаговый туториал: день игры → совет (аудит №15 «режим первых 4 недель»).
  * `day` — сколько дней прожито к моменту показа шага (0 = сразу после старта).
- * «{{goals}}» в первом шаге подставляется из условий победы ТЕКУЩЕЙ сложности. */
+ * «{{goals}}» в первом шаге подставляется из условий победы ТЕКУЩЕЙ сложности.
+ * `target` — якорь spotlight-подсветки (data-tutorial реального UI-элемента). */
 const STEPS: { day: number; tip: Tip }[] = [
   {
     day: 0,
@@ -49,6 +63,7 @@ const STEPS: { day: number; tip: Tip }[] = [
       body:
         'Цель года: {{goals}}. Каждое нажатие «День» проживает день с 8:00 до 23:00: спрос → очередь → заказы → кухня → выручка. «Неделя» прогоняет 7 дней разом. Начните с кнопки «День» и смотрите, как идёт первый день. Советы управляющего будут сменяться сами по мере игры.',
       action: { label: 'Жмите «День» в верхней панели', screen: 'restaurant' },
+      target: 'day-btn',
     },
   },
   {
@@ -58,8 +73,9 @@ const STEPS: { day: number; tip: Tip }[] = [
       title: 'Склад — сердце кухни',
       tone: 'tutorial',
       body:
-        'Автозаказ завхоза уже включён (2 дня запаса): с утра он сам дозакупает продукты. Откройте «Склад»: жёлтые/красные бейджи сроков годности — это будущие списания и санитарный риск. Срочная закупка дороже на 35% — пользуйтесь ей только при стоп-листах.',
+        'Автозаказ завхоза уже включён (2 дня запаса): с утра он сам дозакупит продукты. Откройте «Склад»: жёлтые/красные бейджи сроков годности — это будущие списания и санитарный риск. Срочная закупка дороже на 35% — пользуйтесь ей только при стоп-листах.',
       action: { label: 'Открыть «Склад»', screen: 'warehouse' },
+      target: 'nav-warehouse',
     },
   },
   {
@@ -71,6 +87,7 @@ const STEPS: { day: number; tip: Tip }[] = [
       body:
         'Дефолтный график — «с запасом», это осознанно. На экране «Графики» внизу — панель «Загрузка станций»: серые станции (ниже 50%) означают лишние смены — уберите одну и сэкономьте ФОТ; красные (выше 115%) — кухня не успевает, добавьте смену.',
       action: { label: 'Открыть «Графики»', screen: 'schedule' },
+      target: 'nav-schedule',
     },
   },
   {
@@ -82,6 +99,7 @@ const STEPS: { day: number; tip: Tip }[] = [
       body:
         'Без рекламы поток гостей медленно тает. «Карты и поиск» лучше всего работают для завтраков и ланчей, «Соцсети» — для вечеров и молодёжи. Начните с 70–100 тыс ₽/нед на 4 недели: кампания выйдет на полную силу за пару дней.',
       action: { label: 'Открыть «Маркетинг»', screen: 'marketing' },
+      target: 'nav-marketing',
     },
   },
   {
@@ -93,6 +111,7 @@ const STEPS: { day: number; tip: Tip }[] = [
       body:
         'На «Финансах» два отчёта: P&L показывает заработали ли вы, Cash Flow — есть ли деньги заплатить. Следите за главными строками: Food Cost 30–34%, Labor Cost 25–32%, EBITDA 10–20%. Аренда и налоги уходят раз в 4 недели — касса падает скачком.',
       action: { label: 'Открыть «Финансы»', screen: 'finance' },
+      target: 'nav-finance',
     },
   },
   {
@@ -104,6 +123,7 @@ const STEPS: { day: number; tip: Tip }[] = [
       body:
         'На «Отзывах» фильтр «1–2★» показывает, что именно бесит гостей: «вечно ждать» → добавьте хостес/официантов; «нет половины меню» → стоп-лист из-за склада; «грязно» → бюджет клининга. Один плохой день не обрушит рейтинг — но хроника убьёт.',
       action: { label: 'Открыть «Отзывы»', screen: 'reviews' },
+      target: 'nav-reviews',
     },
   },
   {
@@ -115,6 +135,7 @@ const STEPS: { day: number; tip: Tip }[] = [
       body:
         'Платежи по кредиту — каждые 4 недели. Прогноз на 4 недели (внизу этого экрана) показывает, хватит ли кассы. Держите запас 3+ млн ₽ и DSCR выше 1.3; просрочка = штраф и рост финансового риска, 8 подряд — банкротство.',
       action: { label: 'Открыть «Кредиты»', screen: 'loans' },
+      target: 'nav-loans',
     },
   },
   {
@@ -126,6 +147,7 @@ const STEPS: { day: number; tip: Tip }[] = [
       body:
         'BSC 70+ = здоровый ресторан: финансы 30%, клиенты 25%, процессы 25%, персонал 20%. На 12-й неделе — первый квартальный разбор. После остановки кампаний спрос сползает −50%/нед: планируйте «волнами», а не вечной рекламой.',
       action: { label: 'Открыть «Аналитику»', screen: 'analytics' },
+      target: 'nav-analytics',
     },
   },
 ];
@@ -157,6 +179,30 @@ function dayLabel(day: number, daysPlayed: number): string {
   const week = Math.floor(day / 7) + 1;
   const curWeek = Math.floor(daysPlayed / 7) + 1;
   return week <= curWeek ? `со ${day + 1}-го дня` : `с ${week}-й недели`;
+}
+
+/** Позиция плавающей карточки шага (fixed, z-50): ПОД подсвеченной целью;
+ *  если снизу не помещается — НАД ней; в крайнем случае прижимаем к низу
+ *  вьюпорта. По горизонтали — по центру цели с клампом в границы экрана. */
+function floatingCardStyle(rect: SpotlightRect, measuredH: number): CSSProperties {
+  const margin = 12;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const cardW = Math.min(360, vw - margin * 2);
+  const cardH = measuredH > 0 ? measuredH : 260;
+  let top: number;
+  if (rect.top + rect.height + margin + cardH <= vh - margin) {
+    top = rect.top + rect.height + margin;
+  } else if (rect.top - margin - cardH >= margin) {
+    top = rect.top - margin - cardH;
+  } else {
+    top = Math.max(margin, vh - margin - cardH);
+  }
+  const left = Math.min(
+    Math.max(margin, rect.left + rect.width / 2 - cardW / 2),
+    Math.max(margin, vw - cardW - margin),
+  );
+  return { position: 'fixed', top, left, width: cardW, zIndex: 50 };
 }
 
 export function TutorialCoach() {
@@ -194,6 +240,7 @@ export function TutorialCoach() {
         tone: 'warning',
         title: 'Касса на дне',
         body: `На счёте ${Math.round(restaurant.finance.cash / 1000)} тыс ₽. Сократите расходы (маркетинг/график), приостановите досрочные погашения и проверьте прогноз: аренда/налоги/кредит приходят раз в 4 недели одной пачкой.`,
+        target: 'kpi-grid',
       };
     }
     if (lastWeek.foodCost > 0.36 && lastWeek.revenue > 0) {
@@ -261,16 +308,44 @@ export function TutorialCoach() {
     return STEPS[idx].tip;
   }, [step, calendarIdx, daysPlayed]);
 
-  if (state.phase === 'gameover') return null;
-  const tip = alert ?? tutorialTip;
-  if (!tip || tip.id === hiddenId) return null;
-  const tipBody = tip.body.replace('{{goals}}', goalText);
+  /** Совет к показу (gameover — ничего, как раньше). */
+  const tip = state.phase === 'gameover' ? null : alert ?? tutorialTip;
+  const visible = !!tip && tip.id !== hiddenId;
 
-  const isTutorial = tip.tone === 'tutorial';
-  const stepNumber = STEPS.findIndex((s) => s.tip.id === tip.id) + 1;
+  /* Spotlight (UI/UX №9): rect цели текущего шага; null → подсветки нет,
+     карточка остаётся в потоке (фолбэк — поведение как до подсветки). */
+  const rect = useTutorialTargetRect(visible ? tip?.target : undefined);
+  const reduced = useReducedMotion();
+
+  /** Высота плавающей карточки — следим через ResizeObserver (подписка,
+   *  setState только в асинхронном колбэке), чтобы размещать карточку
+   *  вплотную к подсвеченной цели (под ней / над ней) при любом тексте шага. */
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [cardH, setCardH] = useState(0);
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el || !rect) return;
+    const ro = new ResizeObserver(() => {
+      const h = el.offsetHeight;
+      if (h > 0 && Math.abs(h - cardH) > 2) setCardH(h);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [rect, cardH]);
+  const cardStyle = useMemo<CSSProperties | undefined>(
+    () => (rect ? floatingCardStyle(rect, cardH) : undefined),
+    [rect, cardH],
+  );
+
+  const tipBody = tip ? tip.body.replace('{{goals}}', goalText) : '';
+  const isTutorial = tip ? tip.tone === 'tutorial' : false;
+  const stepNumber = tip ? STEPS.findIndex((s) => s.tip.id === tip.id) + 1 : 0;
   const nextStep = stepNumber > 0 && stepNumber < STEPS.length ? STEPS[stepNumber] : null;
+  const nextHint =
+    nextStep && tip ? `дальше — шаг ${stepNumber + 1} ${dayLabel(nextStep.day, daysPlayed)}` : null;
 
   const dismiss = () => {
+    if (!tip) return;
     setHiddenId(tip.id);
     if (tip.tone === 'warning') {
       try {
@@ -286,11 +361,73 @@ export function TutorialCoach() {
   };
 
   return (
+    <>
+      {/* Маска с «дыркой» + янтарное кольцо вокруг цели шага (UI/UX №9).
+          pointer-events-none: игра остаётся кликабельной. */}
+      <AnimatePresence>
+        {visible && rect && <TutorialSpotlight key="tutorial-spotlight" rect={rect} />}
+      </AnimatePresence>
+
+      {/* Карточка совета: с подсветкой — fixed рядом с целью; без — в потоке
+          (как до spotlight). AnimatePresence — плавные fade 0.2s. */}
+      <AnimatePresence>
+        {visible && tip && (
+          <motion.div
+            key="tutorial-card"
+            ref={cardRef}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduced ? 0 : 0.2 }}
+            className={rect ? 'z-50' : 'relative'}
+            style={cardStyle}
+          >
+            <TipCard
+              tip={tip}
+              tipBody={tipBody}
+              isTutorial={isTutorial}
+              stepNumber={stepNumber}
+              nextHint={nextHint}
+              floating={!!rect}
+              onDismiss={dismiss}
+              onAction={setScreen}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
+
+/** Карточка совета: тот же контент, что и до spotlight (доступность —
+ *  aria-label + aria-live «polite» сохранены). `floating` — вариант
+ *  рядом с подсветкой (чуть заметнее тень). */
+function TipCard({
+  tip,
+  tipBody,
+  isTutorial,
+  stepNumber,
+  nextHint,
+  floating,
+  onDismiss,
+  onAction,
+}: {
+  tip: Tip;
+  tipBody: string;
+  isTutorial: boolean;
+  stepNumber: number;
+  nextHint: string | null;
+  floating: boolean;
+  onDismiss: () => void;
+  onAction: (screen: ScreenId) => void;
+}) {
+  return (
     <section
       aria-label="Совет управляющего"
       aria-live="polite"
       className={cn(
         'relative rounded-xl border p-4 sm:p-5 shadow-sm',
+        floating && 'shadow-lg',
         isTutorial
           ? 'border-amber-200 bg-gradient-to-br from-amber-50 via-stone-50 to-orange-50'
           : 'border-red-200 bg-gradient-to-br from-red-50 via-stone-50 to-amber-50',
@@ -324,7 +461,7 @@ export function TutorialCoach() {
               variant="outline"
               size="sm"
               className="mt-2.5 h-9 border-amber-300 text-amber-800 hover:bg-amber-50 hover:text-amber-900"
-              onClick={() => setScreen(tip.action!.screen)}
+              onClick={() => onAction(tip.action!.screen)}
             >
               {tip.action.label}
               <ChevronRight className="h-4 w-4 ml-0.5" aria-hidden />
@@ -335,7 +472,7 @@ export function TutorialCoach() {
           variant="ghost"
           size="icon"
           className="h-8 w-8 shrink-0 text-stone-400 hover:text-stone-600"
-          onClick={dismiss}
+          onClick={onDismiss}
           aria-label={isTutorial ? 'Понятно, скрыть шаг' : 'Скрыть предупреждение'}
           title={isTutorial ? 'Понятно' : 'Скрыть до следующего дня'}
         >
@@ -354,11 +491,7 @@ export function TutorialCoach() {
               )}
             />
           ))}
-          {nextStep && (
-            <span className="ml-1 text-[10px] text-stone-400">
-              дальше — шаг {stepNumber + 1} {dayLabel(nextStep.day, daysPlayed)}
-            </span>
-          )}
+          {nextHint && <span className="ml-1 text-[10px] text-stone-400">{nextHint}</span>}
         </div>
       )}
     </section>

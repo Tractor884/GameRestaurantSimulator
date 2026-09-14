@@ -18,14 +18,17 @@ import {
 } from 'recharts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useGame } from '@/lib/game/store/gameStore';
+import { useUiPrefs } from '@/lib/game/store/uiPrefs';
 import { KpiCard, SectionCard, WarningBanner, ScoreBar, RangeBadge, money, moneyShort, EmptyState } from '../widgets';
 import { InfoHint, type HintContent } from '../hints';
 import { SATISFACTION } from '@/lib/game/config/satisfaction.config';
 import { dishOf } from '@/lib/game/content/resolve';
 import { DAYS_RU } from '@/lib/game/engine';
+import { cn } from '@/lib/utils';
 import { HallScene } from '../HallScene';
 import { TutorialCoach } from '../TutorialCoach';
 import { GoalsPanel } from '../GoalsPanel';
+import { AnimatedProgress } from '../AnimatedProgress';
 import { RestaurantScene } from '../visual/RestaurantScene';
 import {
   Users,
@@ -60,12 +63,26 @@ function fmtMinutes(v: number): string {
 export function RestaurantScreen() {
   const state = useGame((s) => s.state)!;
   const setMainView = useGame((s) => s.setMainView);
+  const expert = useUiPrefs((s) => s.density) === 'expert';
   const mainView = state.options?.mainView ?? 'report';
   const restaurant = state.restaurant!;
   const lastDay = state.lastDayResult;
   const lastWeek = state.history.weekStats[state.history.weekStats.length - 1];
   const prevWeek = state.history.weekStats[state.history.weekStats.length - 2];
   const weekResult = state.weekResult;
+
+  /* Спарклайны (UI/UX №6): последние 10 закрытых недель по ключевым метрикам. */
+  const spark = useMemo(() => {
+    const w = state.history.weekStats.slice(-10);
+    return {
+      revenue: w.map((x) => x.revenue),
+      guests: w.map((x) => x.guests),
+      rating: w.map((x) => x.rating),
+      foodCost: w.map((x) => x.foodCost * 100),
+      laborCost: w.map((x) => x.laborCost * 100),
+      cash: w.map((x) => x.cashEnd),
+    };
+  }, [state.history.weekStats]);
 
   const hourData = useMemo(
     () =>
@@ -108,25 +125,46 @@ export function RestaurantScreen() {
 
   return (
     <div className="space-y-4">
-      {/* Виджеты (ТЗ §31.3). 7-я карточка — «Ожидание сегодня» (27-b): на
-          мобайле занимает всю строку, на xl — седьмая колонка. */}
-      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
-        <KpiCard icon={Banknote} label="Деньги" value={moneyShort(restaurant.finance.cash)} sub="на счёте" hint="cash" tone={restaurant.finance.cash > 1_000_000 ? 'good' : 'bad'} />
+      {/* Виджеты (ТЗ §31.3). Режим «Новичок» (UI/UX №5): ключевые карточки; «Эксперт»: все + спарклайны + тренды.
+          7-я карточка — «Ожидание сегодня» (27-b): на мобайле занимает всю строку, в «Эксперте» — седьмая колонка.
+          data-tutorial="kpi-grid" — якорь spotlight-подсветки туториала (UI/UX №9). */}
+      <div
+        data-tutorial="kpi-grid"
+        className={cn('grid grid-cols-2 md:grid-cols-4 gap-3', expert ? 'xl:grid-cols-7' : 'xl:grid-cols-5')}
+      >
         <KpiCard
-          icon={Receipt}
-          label="Выручка (нед)"
-          value={lastWeek ? moneyShort(lastWeek.revenue) : '—'}
-          sub={lastWeek ? `чек ${lastWeek.avgCheck.toLocaleString('ru-RU')} ₽` : 'нет данных'}
-          trend={revenueTrend}
-          hint="revenue"
+          icon={Banknote}
+          label="Деньги"
+          value={moneyShort(restaurant.finance.cash)}
+          sub="на счёте"
+          hint="cash"
+          tone={restaurant.finance.cash > 1_000_000 ? 'good' : 'bad'}
+          spark={expert ? spark.cash : undefined}
+          sparkLabel="Касса по неделям"
         />
-        <KpiCard
-          icon={Users}
-          label="Гости (нед)"
-          value={lastWeek ? lastWeek.guests.toLocaleString('ru-RU') : '—'}
-          sub={lastWeek ? `${Math.round(lastWeek.guests / 7)}/день` : ''}
-          hint="guests"
-        />
+        {expert && (
+          <KpiCard
+            icon={Receipt}
+            label="Выручка (нед)"
+            value={lastWeek ? moneyShort(lastWeek.revenue) : '—'}
+            sub={lastWeek ? `чек ${lastWeek.avgCheck.toLocaleString('ru-RU')} ₽` : 'нет данных'}
+            trend={revenueTrend}
+            hint="revenue"
+            spark={spark.revenue}
+            sparkLabel="Выручка по неделям"
+          />
+        )}
+        {expert && (
+          <KpiCard
+            icon={Users}
+            label="Гости (нед)"
+            value={lastWeek ? lastWeek.guests.toLocaleString('ru-RU') : '—'}
+            sub={lastWeek ? `${Math.round(lastWeek.guests / 7)}/день` : ''}
+            hint="guests"
+            spark={spark.guests}
+            sparkLabel="Гости по неделям"
+          />
+        )}
         <KpiCard
           icon={Percent}
           label="Food Cost"
@@ -134,6 +172,9 @@ export function RestaurantScreen() {
           sub="цель 30–34%"
           hint="foodCost"
           tone={lastWeek && lastWeek.foodCost > 0.36 ? 'bad' : lastWeek && lastWeek.foodCost < 0.34 ? 'good' : 'warn'}
+          spark={expert ? spark.foodCost : undefined}
+          sparkLabel="Food Cost по неделям"
+          sparkInvert
         />
         <KpiCard
           icon={ChefHat}
@@ -142,6 +183,9 @@ export function RestaurantScreen() {
           sub="цель 25–32%"
           hint="laborCost"
           tone={lastWeek && lastWeek.laborCost > 0.34 ? 'bad' : lastWeek && lastWeek.laborCost < 0.32 ? 'good' : 'warn'}
+          spark={expert ? spark.laborCost : undefined}
+          sparkLabel="Labor Cost по неделям"
+          sparkInvert
         />
         <KpiCard
           icon={Star}
@@ -150,6 +194,8 @@ export function RestaurantScreen() {
           sub={`${restaurant.reputation.windowReviews.length} отзывов`}
           hint="rating"
           tone={restaurant.reputation.rating >= 4.2 ? 'good' : restaurant.reputation.rating >= 3.8 ? 'warn' : 'bad'}
+          spark={expert ? spark.rating : undefined}
+          sparkLabel="Рейтинг по неделям"
         />
         {/* Обёртка — чтобы Card тянулась на высоту соседей (KpiCard не
             принимает className) и на мобайле занимала всю ширину строки. */}
@@ -374,13 +420,33 @@ export function RestaurantScreen() {
                 <span className="text-stone-600">Стоп-лист</span>
                 <span className="font-semibold tabular-nums text-stone-800">{restaurant.menu.stopList.length} блюд</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-stone-600">Чистота</span>
-                <span className="font-semibold tabular-nums text-stone-800">{restaurant.cleanliness.toFixed(0)}/100</span>
+              {/* Мини-полосы (UI/UX №7 — AnimatedProgress): 0..100 метрики зала;
+                  анимация перелива при изменении, зоны как ScoreBar (≥70/≥45). */}
+              <div>
+                <div className="flex justify-between">
+                  <span className="text-stone-600">Чистота</span>
+                  <span className="font-semibold tabular-nums text-stone-800">{restaurant.cleanliness.toFixed(0)}/100</span>
+                </div>
+                <AnimatedProgress
+                  className="mt-1"
+                  value={restaurant.cleanliness}
+                  max={100}
+                  size="sm"
+                  ariaLabel={`Чистота зала: ${restaurant.cleanliness.toFixed(0)} из 100`}
+                />
               </div>
-              <div className="flex justify-between">
-                <span className="text-stone-600">Климат/атмосфера</span>
-                <span className="font-semibold tabular-nums text-stone-800">{restaurant.atmosphere.toFixed(0)}/100</span>
+              <div>
+                <div className="flex justify-between">
+                  <span className="text-stone-600">Климат/атмосфера</span>
+                  <span className="font-semibold tabular-nums text-stone-800">{restaurant.atmosphere.toFixed(0)}/100</span>
+                </div>
+                <AnimatedProgress
+                  className="mt-1"
+                  value={restaurant.atmosphere}
+                  max={100}
+                  size="sm"
+                  ariaLabel={`Климат/атмосфера: ${restaurant.atmosphere.toFixed(0)} из 100`}
+                />
               </div>
               <div className="flex justify-between">
                 <span className="text-stone-600">Веранда</span>

@@ -21,8 +21,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { Badge } from '@/components/ui/badge';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 import { CsvReportTools } from '../CsvReportTools';
 import { Receipt, Users, TrendingUp, BarChart3, Gauge, Percent } from 'lucide-react';
@@ -67,6 +66,17 @@ export function AnalyticsScreen() {
 
   const bscData = useMemo(() => weekStats.map((w) => ({ week: w.week, bsc: w.bsc })), [weekStats]);
 
+  // Спарклайны для KPI-карточек (UI/UX №6): последние 10 недель.
+  const spark = useMemo(
+    () => ({
+      avgCheck: weekStats.slice(-10).map((w) => w.avgCheck),
+      returning: weekStats.slice(-10).map((w) => w.returningShare * 100),
+      rating: weekStats.slice(-10).map((w) => w.rating),
+      netProfit: weekStats.slice(-10).map((w) => w.netProfit),
+    }),
+    [weekStats],
+  );
+
   // ВСЕ недели — в прокрутке; высота зоны рассчитана на ~10 строк.
   const allWeeks = useMemo(() => [...weekStats].reverse(), [weekStats]);
 
@@ -90,6 +100,8 @@ export function AnalyticsScreen() {
           sub="цель 3500–4000 ₽"
           hint="avgCheck"
           tone={avgCheck >= 3500 ? 'good' : 'warn'}
+          spark={spark.avgCheck}
+          sparkLabel="Средний чек по неделям"
         />
         <KpiCard
           icon={Users}
@@ -98,6 +110,8 @@ export function AnalyticsScreen() {
           sub="доля трафика, 4 нед · норма 15–30%"
           hint="returningShare"
           tone={avgReturning >= 0.15 && avgReturning <= 0.35 ? 'good' : avgReturning < 0.15 ? 'warn' : 'warn'}
+          spark={spark.returning}
+          sparkLabel="Возвратные гости по неделям"
         />
         <KpiCard
           icon={Users}
@@ -106,6 +120,8 @@ export function AnalyticsScreen() {
           sub="по закрытым неделям"
           hint="rating"
           tone={avgRating >= 4.2 ? 'good' : avgRating >= 4.0 ? 'warn' : 'bad'}
+          spark={spark.rating}
+          sparkLabel="Рейтинг по неделям"
         />
         <KpiCard
           icon={TrendingUp}
@@ -114,6 +130,8 @@ export function AnalyticsScreen() {
           sub={`недель закрыто: ${weekStats.length}`}
           hint="netProfit"
           tone={state.history.cumulativeNetProfit >= 0 ? 'good' : 'bad'}
+          spark={spark.netProfit}
+          sparkLabel="Чистая прибыль по неделям"
         />
       </div>
 
@@ -200,7 +218,8 @@ export function AnalyticsScreen() {
 
       {/* BSC */}
       <SectionCard title="Сбалансированная система показателей (BSC)" icon={Gauge}>
-        <div className="h-48">
+        {/* h-56 (мобайл): при меньшей высоте линия с осью 0–100 обрезается */}
+        <div className="h-56">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={bscData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
@@ -231,12 +250,15 @@ export function AnalyticsScreen() {
           </div>
         }
       >
-        <div className="overflow-x-auto rounded-lg border border-stone-100">
-          <ScrollArea className="h-[436px]">
-            <Table className="min-w-[720px]">
-              <TableHeader className="sticky top-0 z-10">
-                <TableRow className="bg-stone-50 hover:bg-stone-50">
-                  <TableHead className="text-xs h-9">Нед</TableHead>
+        <div className="overflow-auto max-h-[436px] rounded-lg border border-stone-100">
+          {/* Сырой <table> вместо обёртки Table: единый скролл-контейнер (обе
+              оси сразу — раньше Radix-вьюпорт резал таблицу по горизонтали),
+              чтобы sticky-шапка (top) и sticky-колонка «Нед» (left) работали
+              вместе (мобайл 390px, UI/UX-мобильная оптимизация). */}
+          <table className="w-full caption-bottom text-sm min-w-[720px]">
+            <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:bg-stone-50 [&_th]:z-20">
+              <TableRow className="bg-stone-50 hover:bg-stone-50 group">
+                <TableHead className="sticky left-0 z-30 bg-stone-50 text-xs h-9">Нед</TableHead>
                   <TableHead className="text-xs text-right h-9">Гости</TableHead>
                   <TableHead className="text-xs text-right h-9">Чек, ₽</TableHead>
                   <TableHead className="text-xs text-right h-9">Выручка</TableHead>
@@ -250,8 +272,8 @@ export function AnalyticsScreen() {
               </TableHeader>
               <TableBody>
                 {allWeeks.map((w) => (
-                  <TableRow key={w.week} className="text-xs whitespace-nowrap">
-                    <TableCell className="font-medium tabular-nums">{w.week}</TableCell>
+                  <TableRow key={w.week} className="text-xs whitespace-nowrap group">
+                    <TableCell className="sticky left-0 z-10 bg-white group-hover:bg-stone-50 font-medium tabular-nums">{w.week}</TableCell>
                     <TableCell className="text-right tabular-nums">{w.guests.toLocaleString('ru-RU')}</TableCell>
                     <TableCell className="text-right tabular-nums">{Math.round(w.avgCheck).toLocaleString('ru-RU')}</TableCell>
                     <TableCell className="text-right tabular-nums">{moneyShort(w.revenue)}</TableCell>
@@ -303,9 +325,8 @@ export function AnalyticsScreen() {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
-          </ScrollArea>
-        </div>
+            </table>
+          </div>
         <p className="text-xs text-stone-400 mt-2">
           Новые недели сверху; в блоке видно ~10 строк — остальные доступны прокруткой.
         </p>

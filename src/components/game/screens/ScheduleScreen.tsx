@@ -213,8 +213,10 @@ export function ScheduleScreen() {
         <div className="overflow-x-auto">
           <Table className="min-w-[900px]">
             <TableHeader>
-              <TableRow>
-                <TableHead className="w-44">Роль</TableHead>
+              <TableRow className="group">
+                {/* Sticky-колонка «Роль» (мобайл 390px): фон обязателен — без
+                    него прокручиваемые ячейки просвечивают под колонкой. */}
+                <TableHead className="sticky left-0 z-10 bg-white group-hover:bg-stone-50 w-44">Роль</TableHead>
                 {DAYS_RU.map((d, i) => (
                   <TableHead
                     key={d}
@@ -228,8 +230,8 @@ export function ScheduleScreen() {
             </TableHeader>
             <TableBody>
               {ROLE_IDS.map((roleId: RoleId) => (
-                <TableRow key={roleId}>
-                  <TableCell>
+                <TableRow key={roleId} className="group">
+                  <TableCell className="sticky left-0 z-10 bg-white group-hover:bg-stone-50">
                     <p className="text-sm font-medium text-stone-800">{STAFF_ROLES[roleId].name}</p>
                     <p className="text-[10px] text-stone-400 tabular-nums">
                       в штате: {staff.pools[roleId]?.count ?? 0}
@@ -264,8 +266,8 @@ export function ScheduleScreen() {
                   })}
                 </TableRow>
               ))}
-              <TableRow className="bg-stone-50 font-semibold">
-                <TableCell className="text-sm text-stone-700">Σ смен в день</TableCell>
+              <TableRow className="group bg-stone-50 font-semibold">
+                <TableCell className="sticky left-0 z-10 bg-stone-50 text-sm text-stone-700">Σ смен в день</TableCell>
                 {totalsPerDay.map((t, i) => (
                   <TableCell
                     key={i}

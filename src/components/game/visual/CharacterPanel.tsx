@@ -3,13 +3,21 @@
  * ПАНЕЛЬ ПЕРСОНАЖА (PRESENTATION-LAYER.md §4–§5)
  * ============================================================================
  * Портрет + имя/роль + реплика + мини-KPI зоны (значения из state).
- * Вставляется сверху пилотных экранов: grid lg:grid-cols-[280px,1fr]
- * (на мобиле — сверху). Существующие таблицы/KPI НЕ удаляются.
+ * Вставляется сверху пилотных экранов: grid lg:grid-cols-[320px_1fr]
+ * xl:grid-cols-[360px_1fr] (на мобиле — сверху). Существующие таблицы/KPI НЕ удаляются.
+ * Вертикальный режим (все экраны персонажей): «геройный» портрет-квадрат
+ * на всю ширину колонки (мобайл: 3/5 ширины) — заметная часть экрана.
+ *
+ * АНИМАЦИИ (рекомендация №1): рамка панели и бейдж настроения — плавный
+ * transition-colors 300ms; точка-индикатор при critical — короткий
+ * «тревожный» pulse (scale 1→1.02 + мягкое притухание, 1.2s, infinite).
+ * prefers-reduced-motion — всё статично, только цветовые переходы.
  */
 
 'use client';
 
 import { useMemo, type ReactNode } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import { useGame } from '@/lib/game/store/gameStore';
 import {
   getCharacterMood,
@@ -131,27 +139,47 @@ export function CharacterPanel({
   const ui = MOOD_UI[mood];
   const kpis = useMemo(() => zoneKpis(characterId), [state, characterId]);
   const size = compact ? 88 : 120;
+  const prefersReduced = useReducedMotion();
+  const critical = mood === 'critical' && !prefersReduced;
 
   return (
     <div
       className={cn(
-        'rounded-xl border bg-white p-3 shadow-sm',
+        'rounded-xl border bg-white shadow-sm transition-colors duration-300',
+        vertical ? 'flex flex-col items-center p-4 text-center' : 'flex gap-3 p-3',
         ui.border,
-        vertical ? 'flex flex-col items-center text-center' : 'flex gap-3',
       )}
     >
-      <CharacterPortrait characterId={characterId} mood={mood} size={size} />
+      {vertical ? (
+        /* «Геройный» портрет: на десктопе занимает всю колонку (320–360px),
+           на планшете половину, на мобиле 3/5 — заметная часть экрана. */
+        <div className="mx-auto w-3/5 sm:w-1/2 lg:w-full">
+          <CharacterPortrait characterId={characterId} mood={mood} fluid />
+        </div>
+      ) : (
+        <CharacterPortrait characterId={characterId} mood={mood} size={size} />
+      )}
       <div className={cn('min-w-0 flex-1 flex flex-col', vertical && 'mt-3 w-full items-center')}>
         <div className={cn('flex w-full items-start justify-between gap-2', vertical && 'justify-center')}>
           <div className={cn('min-w-0', vertical && 'text-center')}>
-            <p className="font-bold text-stone-900 leading-tight">{meta.name}</p>
+            <p className={cn('font-bold text-stone-900 leading-tight', vertical && 'text-lg')}>{meta.name}</p>
             <p className="text-xs text-stone-500">{meta.role}</p>
           </div>
           <span
-            className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold shrink-0', ui.bg, ui.text, vertical && 'ml-2')}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold shrink-0 transition-colors duration-300',
+              ui.bg,
+              ui.text,
+              vertical && 'ml-2',
+            )}
             title={`Состояние зоны: ${ui.label}`}
           >
-            <span className={cn('h-1.5 w-1.5 rounded-full', ui.dot)} aria-hidden />
+            <motion.span
+              className={cn('h-1.5 w-1.5 rounded-full transition-colors duration-300', ui.dot)}
+              aria-hidden
+              animate={critical ? { scale: [1, 1.02, 1], opacity: [1, 0.65, 1] } : { scale: 1, opacity: 1 }}
+              transition={critical ? { duration: 1.2, ease: 'easeInOut', repeat: Infinity } : { duration: 0.2, ease: 'easeOut' }}
+            />
             {ui.label}
           </span>
         </div>

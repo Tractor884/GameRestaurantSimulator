@@ -116,11 +116,11 @@ export function WarehouseScene() {
   );
 }
 
-/** Блок «кладовщик + сцена» для верха экрана Склад. */
+/** Блок «кладовщик + сцена» для верха экрана Склад (портрет-герой в широкой колонке). */
 export function WarehouseVisualBlock() {
   return (
-    <div className="grid gap-3 lg:grid-cols-[280px,1fr]">
-      <CharacterPanel characterId="warehouse_manager" />
+    <div className="grid gap-4 items-start lg:grid-cols-[320px_1fr] xl:grid-cols-[360px_1fr]">
+      <CharacterPanel characterId="warehouse_manager" vertical />
       <WarehouseScene />
     </div>
   );

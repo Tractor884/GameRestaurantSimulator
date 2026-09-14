@@ -6,11 +6,18 @@
  * кадра — устойчивость к неточностям генерации/загрузки. pointer-events-none,
  * fade-in 200 мс, ленивая загрузка. Нет src — слой не рендерится
  * (сцена остаётся чистой, это валидно по смыслу — ART_STYLE §10).
+ *
+ * ПАРАЛЛАКС (рекомендация №2): необязательный depth (px амплитуды) —
+ * смещение через framer-motion MotionValue (rAF, без re-render на mousemove).
+ * Координаты якоря НЕ меняются — параллакс только добавляет transform.
+ * depth = 0 (по умолчанию) — слой статичен, поведение прежнее.
  */
 
 'use client';
 
 import { useState } from 'react';
+import { motion } from 'framer-motion';
+import { useSceneParallaxTransform } from './SceneParallax';
 
 /** Якорь зоны в % от ширины/высоты контейнера сцены (ANCHOR-GRID §4.2). */
 export interface SceneAnchor {
@@ -35,17 +42,21 @@ export function SceneLayer({
   opacity = 1,
   className,
   alt,
+  depth = 0,
 }: {
   src: string | null;
   anchor: SceneAnchor;
   opacity?: number;
   className?: string;
   alt: string;
+  /** Амплитуда параллакса слоя (px); 0/undefined — слой статичен. */
+  depth?: number;
 }) {
   const [shown, setShown] = useState(false);
+  const { x, y } = useSceneParallaxTransform(depth);
   if (!src) return null;
   return (
-    <div
+    <motion.div
       className={`absolute pointer-events-none transition-opacity duration-200 ${shown ? 'opacity-100' : 'opacity-0'} ${className ?? ''}`}
       style={{
         left: `${anchor.x}%`,
@@ -53,10 +64,11 @@ export function SceneLayer({
         width: `${anchor.w}%`,
         height: `${anchor.h}%`,
         opacity: shown ? opacity : 0,
+        x,
+        y,
       }}
       aria-hidden
     >
-      { }
       <img
         src={src}
         alt={alt}
@@ -65,6 +77,6 @@ export function SceneLayer({
         onLoad={() => setShown(true)}
         className="h-full w-full object-contain drop-shadow-md"
       />
-    </div>
+    </motion.div>
   );
 }
