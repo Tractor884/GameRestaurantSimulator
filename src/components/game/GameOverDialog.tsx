@@ -40,6 +40,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { saveLocalEntry } from '@/lib/game/store/localLeaderboard';
 import {
   Trophy,
   Award,
@@ -56,6 +57,7 @@ import {
   CheckCircle2,
   RotateCw,
   Send,
+  WifiOff,
 } from 'lucide-react';
 
 /** Тело POST /api/leaderboard (Task 28). */
@@ -105,7 +107,9 @@ export function GameOverDialog() {
   const resetGame = useGame((s) => s.resetGame);
 
   // ===== Task 28: отправка результата в рейтинг (хуки ДО раннего return) =====
-  const [submitState, setSubmitState] = useState<'idle' | 'sending' | 'ok' | 'error'>('idle');
+  // 'local' (Task 30): API недоступен (оффлайн/статическая сборка VPS) —
+  // результат сохранён в локальном рейтинге этого браузера.
+  const [submitState, setSubmitState] = useState<'idle' | 'sending' | 'ok' | 'local' | 'error'>('idle');
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [manualNick, setManualNick] = useState('');
   const [sentNick, setSentNick] = useState<string | null>(null);
@@ -130,14 +134,23 @@ export function GameOverDialog() {
       setSentNick(nick);
       setLbRefreshKey((k) => k + 1); // подтянуть свежий рейтинг
       markFinalSubmitted(fp); // не отправлять этот финал повторно после reload
+      // Дублируем в локальную историю: если игрок позже откроет игру
+      // в оффлайн-версии — таблица покажет и этот финал (Task 30).
+      saveLocalEntry({ id: fp, createdAt: new Date().toISOString(), ...payload });
       try {
         window.localStorage.setItem('rest-sim-nick', nick);
       } catch {
         /* приватный режим браузера — не критично */
       }
     } catch (e) {
-      setSubmitState('error');
+      // Оффлайн-режим (Task 30): общий рейтинг недоступен (статическая
+      // сборка без API / нет сети) — сохраняем финал локально, чтобы
+      // история попыток не потерялась, и сообщаем об этом мягко.
+      saveLocalEntry({ id: fp, createdAt: new Date().toISOString(), ...payload });
+      setSubmitState('local');
+      setSentNick(nick);
       setSubmitError(e instanceof Error ? e.message : null);
+      setLbRefreshKey((k) => k + 1); // перерисовать таблицу с локальной записью
     }
   }, []);
 
@@ -207,7 +220,8 @@ export function GameOverDialog() {
   });
   const buildFingerprint = (nick: string): string =>
     finalFingerprint(nick, state.seed, grade.score1000, Math.max(1, Math.min(52, weeksLived)));
-  const meHighlightNick = state.playerNick?.trim() || (submitState === 'ok' ? sentNick : null);
+  const meHighlightNick =
+    state.playerNick?.trim() || (submitState === 'ok' || submitState === 'local' ? sentNick : null);
   const meHighlight = meHighlightNick ? { nick: meHighlightNick, score: Math.round(grade.score1000) } : null;
 
   const HeadIcon =
@@ -461,6 +475,18 @@ export function GameOverDialog() {
                 ✓ Результат отправлен в рейтинг — {grade.score1000} очков, уровень {grade.rank}
               </p>
             )}
+            {submitState === 'local' && (
+              <div
+                className="rounded-lg border border-amber-200 bg-amber-50 p-3 flex items-center gap-2.5"
+                role="status"
+              >
+                <WifiOff className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+                <p className="text-sm text-amber-800" aria-live="polite">
+                  Оффлайн-версия: результат сохранён в локальном рейтинге ({grade.score1000} очков,
+                  уровень {grade.rank}). Общий рейтинг среди друзей доступен в онлайн-версии игры.
+                </p>
+              </div>
+            )}
             {submitState === 'error' && (
               <div
                 className="rounded-lg border border-red-200 bg-red-50 p-3 flex items-center justify-between gap-3 flex-wrap"
@@ -486,7 +512,7 @@ export function GameOverDialog() {
             )}
 
             {/* Старый сейв без ника: ручной ввод перед отправкой */}
-            {!state.playerNick && submitState !== 'ok' && (
+            {!state.playerNick && submitState !== 'ok' && submitState !== 'local' && (
               <div className="rounded-lg border border-stone-200 bg-stone-50 p-3.5">
                 <label htmlFor="final-nick" className="text-sm font-semibold text-stone-800">
                   Ник для рейтинга среди друзей

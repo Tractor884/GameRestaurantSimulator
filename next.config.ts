@@ -1,11 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Статическая сборка: игра на 100% клиентская, сервер только раздаёт файлы.
-  // Деплой: nginx раздаёт out/ (см. worklog Task 25-27, VPS пользователя).
-  output: "export",
+  /* Деплой (VPS, nginx, статика) НЕ использует этот конфиг напрямую:
+     scripts/build-static.sh собирает копию проекта с output:"export"
+     (без API-роутов) — здесь конфиг остаётся дев-режимным, чтобы
+     /api/leaderboard (Prisma + общий рейтинг) работал в песочнице. */
   images: {
-    // для output:export оптимизатор next/image недоступен — все ассеты уже WebP
+    // все игровые ассеты уже WebP — оптимизатор не нужен (паритет с прод-статикой)
     unoptimized: true,
   },
   /* config options here */

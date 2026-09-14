@@ -7,6 +7,10 @@
  *
  * Топ-50 финалов: место, ник, ресторан, уровень (ранг A+…D−), очки 0–1000.
  * Своя строка подсвечивается (совпадение nick + score — «это вы»).
+ *
+ * Task 30 (оффлайн-режим): в статической сборке для VPS нет API-роутов,
+ * поэтому при недоступности /api/leaderboard таблица показывает локальную
+ * историю финалов (localStorage) с пометкой «оффлайн-версия».
  */
 'use client';
 
@@ -16,19 +20,14 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
-import { Trophy, RotateCw, RefreshCw, Users } from 'lucide-react';
+import { Trophy, RotateCw, RefreshCw, Users, WifiOff } from 'lucide-react';
+import {
+  loadLocalEntries,
+  type LocalLeaderboardEntry,
+} from '@/lib/game/store/localLeaderboard';
 
-/** Запись рейтинга (ответ GET /api/leaderboard → results[]). */
-export interface LeaderboardEntry {
-  id: string;
-  nick: string;
-  restaurantName: string;
-  level: string;
-  score: number;
-  difficulty: string;
-  weeksLived: number;
-  createdAt: string;
-}
+/** Запись рейтинга (ответ GET /api/leaderboard → results[] или локальная история). */
+export type LeaderboardEntry = LocalLeaderboardEntry;
 
 export interface LeaderboardTableProps {
   /** Подсветка своей строки — совпадение по нику И очкам. */
@@ -84,6 +83,7 @@ export function LeaderboardTable({
   const [entries, setEntries] = useState<LeaderboardEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false); // API недоступен → локальная история
   const [nonce, setNonce] = useState(0); // «Обновить» → перезапрос
 
   // «Обновить»: спиннер включаем в обработчике клика (не в эффекте),
@@ -107,13 +107,17 @@ export function LeaderboardTable({
               : [],
           );
           setError(null);
+          setOffline(false);
           setLoading(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setEntries(null);
-          setError('Не удалось загрузить рейтинг — проверьте соединение');
+          // Оффлайн-режим (Task 30): статическая сборка без API — показываем
+          // локальную историю финалов этого браузера вместо красной ошибки.
+          setEntries(loadLocalEntries());
+          setOffline(true);
+          setError(null);
           setLoading(false);
         }
       });
@@ -160,6 +164,17 @@ export function LeaderboardTable({
         <span role="columnheader" className="text-right">Очки</span>
       </div>
 
+      {/* Оффлайн-режим: вместо общего рейтинга — локальная история */}
+      {offline && !loading && (
+        <div className="flex items-center gap-2 px-3.5 py-2.5 bg-amber-50 border-b border-amber-100" role="status">
+          <WifiOff className="h-3.5 w-3.5 text-amber-600 shrink-0" aria-hidden />
+          <p className="text-[11px] leading-snug text-amber-800">
+            Оффлайн-версия: общий рейтинг игроков недоступен — показана локальная
+            история ваших финалов. Полный рейтинг — в онлайн-версии игры.
+          </p>
+        </div>
+      )}
+
       {/* Загрузка */}
       {loading && entries === null && (
         <div aria-label="Рейтинг загружается">
@@ -184,8 +199,14 @@ export function LeaderboardTable({
       {!loading && !error && entries !== null && entries.length === 0 && (
         <div className="flex flex-col items-center gap-2 px-3.5 py-8 text-center">
           <Trophy className="h-8 w-8 text-stone-300" aria-hidden />
-          <p className="text-sm text-stone-500">Рейтинг пуст — вы будете первыми</p>
-          <p className="text-xs text-stone-400">Дойдите до финала года (или банкротства), и результат появится здесь</p>
+          <p className="text-sm text-stone-500">
+            {offline ? 'Локальный рейтинг пуст — вы будете первыми' : 'Рейтинг пуст — вы будете первыми'}
+          </p>
+          <p className="text-xs text-stone-400">
+            {offline
+              ? 'Дойдите до финала года (или банкротства) — результат сохранится на этом устройстве'
+              : 'Дойдите до финала года (или банкротства), и результат появится здесь'}
+          </p>
         </div>
       )}
 
@@ -262,7 +283,7 @@ export function LeaderboardTable({
           <Users className="h-3 w-3 shrink-0" aria-hidden />
           {entries.length === 50
             ? 'Показан топ-50 — более старые попытки уходят за пределы таблицы'
-            : `Записей в рейтинге: ${entries.length}`}
+            : `${offline ? 'Локальных записей' : 'Записей в рейтинге'}: ${entries.length}`}
         </p>
       )}
     </section>
