@@ -240,7 +240,59 @@ export function applyQuit(restaurant: Restaurant, roleId: RoleId): boolean {
   const pool = restaurant.staff.pools[roleId];
   if (pool.count <= 1) return false;
   pool.count -= 1;
+  noteQuit(restaurant, 1);
   return true;
+}
+
+/* ============================= ТЕКУЧЕСТЬ (26-b) ============================= */
+
+/** Ленивая инициализация счётчика текучести (первое обращение). */
+function turnoverOf(restaurant: Restaurant): NonNullable<StaffState['turnover']> {
+  return (restaurant.staff.turnover ??= { hiredTotal: 0, quitTotal: 0, firedTotal: 0, snapshots: [] });
+}
+
+/** Зарегистрировать найм n сотрудников (hireStaff/события найма). */
+export function noteHired(restaurant: Restaurant, n: number): void {
+  if (n <= 0) return;
+  turnoverOf(restaurant).hiredTotal += n;
+}
+
+/** Зарегистрировать увольнение игроком n сотрудников. */
+export function noteFired(restaurant: Restaurant, n: number): void {
+  if (n <= 0) return;
+  turnoverOf(restaurant).firedTotal += n;
+}
+
+/** Зарегистрировать уход n сотрудников по своей воле (мораль/события/шеф). */
+export function noteQuit(restaurant: Restaurant, n: number): void {
+  if (n <= 0) return;
+  turnoverOf(restaurant).quitTotal += n;
+}
+
+/** Недельный снапшот штатной численности (вызывается в closeWeek ПОСЛЕ
+ *  увольнений недели): {week, headcount, накопленные quit+fired на момент}.
+ *  Окно хранит последние 13 недель (~квартал). */
+export function noteTurnoverSnapshot(restaurant: Restaurant, week: number): void {
+  const t = turnoverOf(restaurant);
+  const headcount = Object.values(restaurant.staff.pools).reduce((s, p) => s + p.count, 0);
+  t.snapshots.push({ week, headcount, quitFired: t.quitTotal + t.firedTotal });
+  if (t.snapshots.length > 13) t.snapshots = t.snapshots.slice(-13);
+}
+
+/** KPI «Текучесть за квартал», %: Δ(quit+fired) за окно последних ≤13
+ *  снапшотов ÷ средняя численность окна × 100. null — снапшотов < 4
+ *  (меньше месяца истории — рано судить). Норма зрелого ресторана ≤15–20%.
+ *  Pure-функция: состояние не меняет. */
+export function quarterTurnoverPct(staff: StaffState): number | null {
+  const t = staff.turnover;
+  if (!t || t.snapshots.length < 4) return null;
+  const snaps = t.snapshots.slice(-13);
+  const cumStart = snaps[0].quitFired ?? 0;
+  const cumEnd = snaps[snaps.length - 1].quitFired ?? t.quitTotal + t.firedTotal;
+  const delta = Math.max(0, cumEnd - cumStart);
+  const avgHeadcount = snaps.reduce((s, x) => s + x.headcount, 0) / snaps.length;
+  if (avgHeadcount <= 0) return null;
+  return Math.round((delta / avgHeadcount) * 1000) / 10;
 }
 
 /** Текучка: шанс увольнения при низкой морали (вызывается в конце недели).
@@ -257,6 +309,8 @@ export function weeklyTurnover(restaurant: Restaurant, rngChance: () => number, 
       const p = STAFF_DYNAMICS.quitChanceAtZeroMorale * (1 - pool.morale / STAFF_DYNAMICS.quitMoraleThreshold);
       if (rngChance() < p * pool.count * (insured ? 0.6 : 1) * quitMult) {
         pool.count -= 1;
+        // ТЕКУЧЕСТЬ (26-b): каждый ушедший по своей воле попадает в счётчик.
+        noteQuit(restaurant, 1);
         fired.push(STAFF_ROLES[roleId].name);
       }
     }

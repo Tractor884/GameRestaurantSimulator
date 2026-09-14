@@ -39,8 +39,11 @@ import {
   Loader2,
   Gauge,
   Clock,
+  Hourglass,
+  CheckCircle2,
   ImageIcon,
   GraduationCap,
+  ContactRound,
 } from 'lucide-react';
 
 import { GameOverDialog, FinalStatusBadge } from './GameOverDialog';
@@ -129,6 +132,10 @@ const AcademyScreen = dynamic(() => import('./screens/AcademyScreen').then((m) =
   ssr: false,
   loading: ScreenSkeleton,
 });
+const AdvisorsScreen = dynamic(() => import('./screens/AdvisorsScreen').then((m) => m.AdvisorsScreen), {
+  ssr: false,
+  loading: ScreenSkeleton,
+});
 const ArtManagerScreen = dynamic(() => import('./screens/ArtManagerScreen').then((m) => m.ArtManagerScreen), {
   ssr: false,
   loading: ScreenSkeleton,
@@ -152,6 +159,7 @@ const NAV: { group: string; items: { id: ScreenId; label: string; icon: typeof U
     items: [
       { id: 'staff', label: 'Персонал', icon: Users },
       { id: 'schedule', label: 'Графики', icon: CalendarDays },
+      { id: 'advisors', label: 'Советники', icon: ContactRound },
     ],
   },
   {
@@ -198,7 +206,14 @@ export function GameShell() {
 
   const restaurant = state?.restaurant;
   const lastWeek = state?.history.weekStats[state.history.weekStats.length - 1];
-  const pendingCritical = state?.activeEvents.find((e) => !e.resolved) ?? null;
+  // ЕДИНАЯ СИСТЕМА «СОБЫТИЯ = ДИЛЕММЫ»: блокирующий диалог — ТОЛЬКО у
+  // критических событий; обычные ждут решения на вкладке «События» до
+  // дедлайна (2 недели) и ход времени не блокируют.
+  const pendingCritical =
+    state?.activeEvents.find((e) => !e.resolved && e.criticality === 'critical') ?? null;
+  const pendingDecisions =
+    state?.activeEvents.filter((e) => !e.resolved && e.criticality !== 'critical').length ?? 0;
+  const unresolvedEvents = state?.activeEvents.filter((e) => !e.resolved).length ?? 0;
   const middayActive = useGame((s) => s.midday != null);
 
   // Тосты через sonner.
@@ -229,7 +244,9 @@ export function GameShell() {
       if (document.querySelector('[data-state="open"][role="dialog"], [role="dialog"][data-state="open"]')) return;
       const s = useGame.getState();
       if (!s.state || s.busy || s.state.phase === 'gameover') return;
-      if (s.state.activeEvents.some((ev) => !ev.resolved)) return;
+      // Горячие клавиши блокирует только нерешённое КРИТИЧЕСКОЕ событие;
+      // обычные события ждут решения до дедлайна — время идёт.
+      if (s.state.activeEvents.some((ev) => !ev.resolved && ev.criticality === 'critical')) return;
       const key = e.key.toLowerCase();
       // День на паузе «экстренных решений»: D продолжает его (W заблокирован).
       if (s.midday) {
@@ -348,18 +365,33 @@ export function GameShell() {
                 <Clock className="h-3.5 w-3.5 mr-1" aria-hidden />
                 Пауза: экстренные решения
               </Badge>
-            ) : pendingCritical ? (
-              <Badge variant="secondary" className="bg-red-100 text-red-800">
-                <AlertTriangle className="h-3.5 w-3.5 mr-1" aria-hidden />
-                Требуется решение
-              </Badge>
             ) : state.phase === 'gameover' ? (
               <FinalStatusBadge />
             ) : (
               <>
+                {pendingCritical ? (
+                  <Badge variant="secondary" className="bg-red-100 text-red-800">
+                    <AlertTriangle className="h-3.5 w-3.5 mr-1" aria-hidden />
+                    Требуется решение
+                  </Badge>
+                ) : (
+                  pendingDecisions > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setScreen('events')}
+                      aria-label={`События: решений ожидает ${pendingDecisions}. Открыть вкладку «События»`}
+                      className="inline-flex h-11 items-center gap-1.5 rounded-full bg-amber-100 px-3 text-xs font-semibold text-amber-900 transition-colors hover:bg-amber-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                    >
+                      <Hourglass className="h-3.5 w-3.5" aria-hidden />
+                      Решений: {pendingDecisions}
+                    </button>
+                  )
+                )}
+                {/* День/Неделя доступны даже при висящих обычных событиях —
+                    они ждут решения до дедлайна, время идёт. */}
                 <Button
                   onClick={runDay}
-                  disabled={busy}
+                  disabled={busy || !!pendingCritical}
                   variant="outline"
                   size="sm"
                   className="border-stone-300 active:scale-[0.98]"
@@ -369,7 +401,7 @@ export function GameShell() {
                 </Button>
                 <Button
                   onClick={runWeek}
-                  disabled={busy}
+                  disabled={busy || !!pendingCritical}
                   size="sm"
                   className="bg-amber-600 hover:bg-amber-700 text-white active:scale-[0.98]"
                 >
@@ -422,9 +454,14 @@ export function GameShell() {
                       aria-hidden
                     />
                     <span className="truncate">{item.label}</span>
-                    {item.id === 'events' && state.activeEvents.length > 0 && (
-                      <Badge className="ml-auto bg-red-500 text-white text-[10px] px-1.5 min-w-5 justify-center">
-                        {state.activeEvents.length}
+                    {item.id === 'events' && unresolvedEvents > 0 && (
+                      <Badge
+                        className={cn(
+                          'ml-auto text-white text-[10px] px-1.5 min-w-5 justify-center',
+                          pendingCritical ? 'bg-red-500 hover:bg-red-500' : 'bg-amber-500 hover:bg-amber-500',
+                        )}
+                      >
+                        {unresolvedEvents}
                       </Badge>
                     )}
                   </button>
@@ -459,6 +496,7 @@ export function GameShell() {
               {screen === 'licenses' && <LicensesScreen />}
               {screen === 'equipment' && <EquipmentScreen />}
               {screen === 'loans' && <LoansScreen />}
+              {screen === 'advisors' && <AdvisorsScreen />}
               {screen === 'quarterly' && <QuarterlyScreen />}
               {screen === 'academy' && <AcademyScreen />}
               {screen === 'art' && <ArtManagerScreen />}
@@ -496,10 +534,24 @@ export function GameShell() {
                 <button
                   key={i}
                   onClick={() => resolveCritical(pendingCritical.id, i)}
-                  className="w-full rounded-lg border border-stone-200 p-3 text-left hover:border-amber-400 hover:bg-amber-50 transition-colors"
+                  className="w-full min-h-11 rounded-lg border border-stone-200 p-3 text-left hover:border-amber-400 hover:bg-amber-50 transition-colors"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-medium text-stone-800">{res.label}</span>
+                    <span className="text-sm font-medium text-stone-800 flex items-center gap-1.5 min-w-0">
+                      {res.tone === 'negative' && (
+                        <span title="Исход скорее негативный" className="shrink-0 inline-flex">
+                          <AlertTriangle className="h-3.5 w-3.5 text-red-500" aria-hidden />
+                          <span className="sr-only">Исход скорее негативный</span>
+                        </span>
+                      )}
+                      {res.tone === 'positive' && (
+                        <span title="Исход скорее позитивный" className="shrink-0 inline-flex">
+                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" aria-hidden />
+                          <span className="sr-only">Исход скорее позитивный</span>
+                        </span>
+                      )}
+                      <span className="truncate">{res.label}</span>
+                    </span>
                     {res.cost > 0 && (
                       <Badge variant="secondary" className="bg-stone-100 tabular-nums">
                         {money(res.cost)}

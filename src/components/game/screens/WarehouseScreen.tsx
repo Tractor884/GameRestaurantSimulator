@@ -12,7 +12,7 @@ import { INGREDIENTS_MAP, INGREDIENT_CATEGORIES } from '@/lib/game/content/ingre
 import { dayIndex, HACCP, haccpStatus } from '@/lib/game/engine';
 import { INFLATION } from '@/lib/game/config/inflation.config';
 import { PROCUREMENT, PROC_LABELS, activeProcurement, procAutoCoverDays } from '@/lib/game/config/procurement.config';
-import type { ProcurementPolicyId } from '@/lib/game/types';
+import type { ProcurementPolicyId, PurchaseOrder } from '@/lib/game/types';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -116,6 +116,24 @@ export function WarehouseScreen() {
   const stockValue = rows.reduce((s, r) => s + r.value, 0);
   const pending = restaurant.inventory.pendingOrders;
   const pendingCost = pending.reduce((s, o) => s + o.paid, 0);
+
+  /** Группировка ожидаемых поставок по дате прибытия (Сегодня/Завтра/Позже). */
+  const pendingGroups = useMemo<
+    { key: string; label: string; sortKey: number; orders: PurchaseOrder[] }[]
+  >(() => {
+    const map = new Map<string, { key: string; label: string; sortKey: number; orders: PurchaseOrder[] }>();
+    for (const o of pending) {
+      const diff = dayIndex(o.arrivesAt) - nowIdx;
+      const key = diff <= 0 ? 'today' : diff === 1 ? 'tomorrow' : `w${o.arrivesAt.week}`;
+      const label =
+        diff <= 0 ? 'Сегодня' : diff === 1 ? 'Завтра' : `Позже (нед ${o.arrivesAt.week})`;
+      const sortKey = diff <= 0 ? 0 : diff === 1 ? 1 : 100 + o.arrivesAt.week;
+      const g = map.get(key) ?? { key, label, sortKey, orders: [] };
+      g.orders.push(o);
+      map.set(key, g);
+    }
+    return [...map.values()].sort((a, b) => a.sortKey - b.sortKey);
+  }, [pending, nowIdx]);
   const expiring = rows.filter((r) => r.daysLeft >= 0 && r.daysLeft <= 2).length;
   const expired = rows.filter((r) => r.daysLeft < 0).length;
 
@@ -332,51 +350,87 @@ export function WarehouseScreen() {
       </SectionCard>
 
       {/* Ожидают доставки */}
-      <SectionCard title="Ожидают доставки" icon={Truck}>
+      <SectionCard
+        title="Ожидают доставки"
+        icon={Truck}
+        right={
+          pending.length > 0 ? (
+            <Badge
+              variant="secondary"
+              className="bg-stone-100 text-stone-600 shrink-0 tabular-nums whitespace-nowrap"
+              aria-label={`${pending.length} позиций в пути, оплачено ${money(pendingCost)}`}
+            >
+              {pending.length} поз. · оплачено {moneyShort(pendingCost)}
+            </Badge>
+          ) : undefined
+        }
+      >
         {pending.length === 0 ? (
           <EmptyState text="Нет оплаченных заказов в пути" />
         ) : (
-          <ScrollArea className="max-h-[420px] pr-3">
-            <div className="space-y-0.5">
-              {pending.map((o, i) => {
-              const ing = INGREDIENTS_MAP[o.ingredientId];
-              const diff = dayIndex(o.arrivesAt) - nowIdx;
-              const arriveLabel =
-                diff <= 0 ? 'сегодня' : diff === 1 ? 'завтра' : `нед ${o.arrivesAt.week}`;
-              return (
-                <div
-                  key={`${o.ingredientId}-${i}`}
-                  className="flex items-center justify-between gap-2 text-sm py-2 border-b border-stone-100 last:border-0"
-                >
-                  <div className="min-w-0 flex items-center gap-2">
-                    <span className="text-stone-700 truncate">{ing?.name ?? o.ingredientId}</span>
-                    {o.urgent && (
-                      <Badge variant="secondary" className="bg-red-100 text-red-800 shrink-0">
-                        срочно
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="tabular-nums text-stone-500">
-                      {o.quantity} {ing?.unit ?? ''}
-                    </span>
-                    <Badge
-                      variant="secondary"
-                      className={cn(
-                        arriveLabel === 'сегодня'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-amber-100 text-amber-800',
-                      )}
+          <div>
+            {/* ФИКС 26-ui: max-h на корне ScrollArea НЕ ограничивает Radix
+                Viewport (height:100% → auto, контент «вылезает» из рамки без
+                прокрутки). Ограничиваем сам Viewport — тогда он реально
+                скроллится и появляется заметный thumb. */}
+            <ScrollArea
+              type="always"
+              className="max-h-[320px] rounded-lg [&>[data-slot=scroll-area-viewport]]:max-h-[320px] [&_[data-slot=scroll-area-thumb]]:bg-stone-400"
+            >
+              <div className="pr-3">
+                {pendingGroups.map((g) => (
+                  <div key={g.key} className="mb-1">
+                    <div
+                      className="sticky top-0 z-10 flex items-center gap-2 border-b border-stone-200 bg-stone-50/95 px-2 py-1.5 backdrop-blur-sm"
+                      aria-label={`Прибытие: ${g.label}, ${g.orders.length} позиций`}
                     >
-                      {arriveLabel}
-                    </Badge>
-                    <span className="tabular-nums font-semibold text-stone-800">{money(o.paid)}</span>
+                      <Clock className="h-3.5 w-3.5 text-stone-400 shrink-0" aria-hidden />
+                      <span className="text-xs font-semibold text-stone-700">{g.label}</span>
+                      <Badge
+                        variant="secondary"
+                        className="h-5 bg-white text-stone-500 border border-stone-200 px-1.5 tabular-nums"
+                      >
+                        {g.orders.length}
+                      </Badge>
+                    </div>
+                    {g.orders.map((o, i) => {
+                      const ing = INGREDIENTS_MAP[o.ingredientId];
+                      return (
+                        <div
+                          key={`${o.ingredientId}-${i}`}
+                          className="flex items-center justify-between gap-2 text-sm py-1.5 border-b border-stone-100 last:border-0"
+                        >
+                          <div className="min-w-0 flex items-center gap-2">
+                            <span className="text-stone-700 truncate">{ing?.name ?? o.ingredientId}</span>
+                            {o.urgent && (
+                              <Badge variant="secondary" className="bg-red-100 text-red-800 shrink-0">
+                                срочно
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="tabular-nums text-stone-500">
+                              {o.quantity} {ing?.unit ?? ''}
+                            </span>
+                            <span className="w-20 text-right tabular-nums font-semibold text-stone-800">
+                              {money(o.paid)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                </div>
-              );
-              })}
-            </div>
-          </ScrollArea>
+                ))}
+              </div>
+            </ScrollArea>
+            {pending.length > 15 && (
+              <p className="mt-2 border-t border-stone-100 pt-2 text-xs text-stone-500 tabular-nums">
+                Итого к доставке:{' '}
+                <b className="text-stone-700">{pending.length} позиций</b> на{' '}
+                <b className="text-stone-700">{money(pendingCost)}</b>
+              </p>
+            )}
+          </div>
         )}
       </SectionCard>
     </div>

@@ -28,7 +28,11 @@ export function simulateWeek(
   while (
     current.week === startWeek &&
     current.phase !== 'gameover' &&
-    !current.activeEvents.some((e) => !e.resolved) &&
+    // ЕДИНАЯ СИСТЕМА «СОБЫТИЯ = ДИЛЕММЫ»: неделю прерывает только
+    // нерешённое КРИТИЧЕСКОЕ событие (блокирующий диалог). Обычные события
+    // ждут решения до дедлайна (2 недели) — время идёт, просрочка
+    // закроется авто-выбором на закрытии недели.
+    !current.activeEvents.some((e) => !e.resolved && e.criticality === 'critical') &&
     guard < 8
   ) {
     const { state: next } = simulateDay(current, { plannedActions: [] }, seed);

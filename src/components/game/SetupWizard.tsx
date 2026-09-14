@@ -4,7 +4,7 @@
  */
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -19,7 +19,6 @@ import {
   RENOVATION_LEVELS,
   EQUIPMENT_COSTS,
   EQUIPMENT_LEVELS,
-  VERANDA,
   ALCOHOL_LICENSE,
 } from '@/lib/game/config/premises.config';
 import { DIFFICULTIES } from '@/lib/game/config/difficulty.config';
@@ -41,7 +40,16 @@ import {
   ArrowLeft,
   Check,
   Gauge,
+  UserRound,
 } from 'lucide-react';
+
+/** localStorage-ключ ника (Task 28): автоподстановка в повторных играх. */
+const NICK_KEY = 'rest-sim-nick';
+
+/** Подписка не нужна: сохранённый ник читается один раз при первом
+ *  клиентском рендере (useSyncExternalStore — канонический способ читать
+ *  внешнее клиентское состояние без рассинхрона гидратации). */
+const subscribeNoop = () => () => {};
 
 const STEPS = [
   { id: 'difficulty', label: 'Сложность', icon: Gauge },
@@ -67,10 +75,21 @@ export function SetupWizard() {
     hall: 'standard',
   });
   const [loanAmount, setLoanAmount] = useState(12_000_000);
-  const [veranda, setVeranda] = useState(true);
   const [alcohol, setAlcohol] = useState(true);
   const [name, setName] = useState('«Ложка-Поварёшка»');
   const [menuIds, setMenuIds] = useState<string[]>([...STARTER_MENU_IDS]);
+  // Task 28: ник для рейтинга — обязателен (2–24 симв.). Сохранённый ник
+  // подтягивается из localStorage автоматически (серверный снапшот — пусто).
+  const savedNick = useSyncExternalStore(
+    subscribeNoop,
+    () => window.localStorage.getItem(NICK_KEY) ?? '',
+    () => '',
+  );
+  const [nickEdit, setNickEdit] = useState<string | null>(null);
+  const nick = nickEdit ?? savedNick;
+
+  const nickTrim = nick.trim();
+  const nickValid = nickTrim.length >= 2 && nickTrim.length <= 24;
 
   const loc = LOCATIONS.find((l) => l.id === locationId)!;
   const prem = PREMISES_SIZES[premisesSize];
@@ -82,34 +101,37 @@ export function SetupWizard() {
       EQUIPMENT_COSTS[equip.kitchen].kitchen + EQUIPMENT_COSTS[equip.coffee].coffee + EQUIPMENT_COSTS[equip.hall].hall;
     const rent = Math.round(prem.areaM2 * loc.rentPerM2);
     const deposit = rent * loc.depositMonths;
-    const verandaCost = veranda ? VERANDA.setupCost : 0;
     const licenseCost = alcohol ? ALCOHOL_LICENSE.annualCost : 0;
     const budget = diff.ownerEquity + loanAmount;
-    const spent = renovationCost + equipmentCost + deposit + verandaCost + licenseCost;
+    const spent = renovationCost + equipmentCost + deposit + licenseCost;
     return {
-      renovationCost, equipmentCost, rent, deposit, verandaCost, licenseCost, budget, spent,
+      renovationCost, equipmentCost, rent, deposit, licenseCost, budget, spent,
       left: budget - spent - 1_000_000, // запас на оборотку
       monthly: annuityPayment(loanAmount, diff.loanRate, diff.loanTermMonths),
     };
-  }, [prem, loc, renovation, equip, loanAmount, veranda, alcohol, diff]);
+  }, [prem, loc, renovation, equip, loanAmount, alcohol, diff]);
 
   const launch = () => {
+    // Ник обязателен: без валидного ника кнопка запуска недоступна.
+    const savedNick = nickTrim;
+    window.localStorage.setItem(NICK_KEY, savedNick);
     startGame({
       seed: Math.floor(Math.random() * 1_000_000) + 1000,
       restaurantName: name,
+      nick: savedNick,
       difficultyId: diff.id,
       locationId,
       premisesSize,
       renovation,
       loanAmount,
       equipment: equip,
-      veranda,
       alcoholLicense: alcohol,
       menuIds,
     });
   };
 
   const canNext = () => {
+    if (step === 0 && !nickValid) return false;
     if (step === 6) return menuIds.length >= 12;
     return true;
   };
@@ -157,9 +179,36 @@ export function SetupWizard() {
       {/* Контент */}
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-6xl mx-auto px-4 py-6">
-          {/* Шаг 0 — сложность (ТЗ §36) */}
+          {/* Шаг 0 — регистрация по нику + сложность (ТЗ §36; Task 28 — рейтинг) */}
           {step === 0 && (
             <div>
+              {/* Ник для рейтинга среди друзей (Task 28) */}
+              <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50/70 p-4">
+                <label htmlFor="player-nick" className="text-sm font-semibold text-stone-800 flex items-center gap-1.5">
+                  <UserRound className="h-4 w-4 text-amber-600" aria-hidden />
+                  Ваш ник (для рейтинга среди друзей)
+                </label>
+                <Input
+                  id="player-nick"
+                  value={nick}
+                  onChange={(e) => setNickEdit(e.target.value)}
+                  className="mt-2 h-11 bg-white max-w-md"
+                  placeholder="Например: ШефМихаил"
+                  maxLength={24}
+                  autoComplete="nickname"
+                  aria-describedby="player-nick-hint"
+                  aria-invalid={!nickValid}
+                />
+                <p
+                  id="player-nick-hint"
+                  className={cn('text-xs mt-1.5', nickValid ? 'text-stone-500' : 'text-red-600 font-medium')}
+                  role={nickValid ? undefined : 'alert'}
+                >
+                  {nickValid
+                    ? 'Под этим именем ваш результат года попадёт в общий рейтинг игроков.'
+                    : 'Ник нужен для рейтинга — минимум 2 символа (до 24). Без ника нельзя продолжить.'}
+                </p>
+              </div>
               <div className="mb-4">
                 <h2 className="text-lg font-bold text-stone-900">Сложность года</h2>
                 <p className="text-sm text-stone-500">
@@ -406,17 +455,17 @@ export function SetupWizard() {
                   </div>
                   <div className="flex items-center justify-between rounded-lg border border-stone-200 p-3">
                     <div>
-                      <p className="font-medium text-stone-800 text-sm">Летняя веранда</p>
-                      <p className="text-xs text-stone-500">+{VERANDA.seats} мест с мая по сентябрь · {moneyShort(VERANDA.setupCost)}</p>
-                    </div>
-                    <Switch checked={veranda} onCheckedChange={setVeranda} aria-label="Веранда" />
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg border border-stone-200 p-3">
-                    <div>
                       <p className="font-medium text-stone-800 text-sm">Лицензия на алкоголь</p>
                       <p className="text-xs text-stone-500">+выручка с вина и пива · {moneyShort(ALCOHOL_LICENSE.annualCost)}/год</p>
                     </div>
                     <Switch checked={alcohol} onCheckedChange={setAlcohol} aria-label="Лицензия на алкоголь" />
+                  </div>
+                  <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                    <p className="font-medium text-stone-800 text-sm">Летняя веранда — после открытия</p>
+                    <p className="text-xs text-stone-500 mt-1">
+                      Разрешение на веранду продаётся с апреля на вкладке «Лицензии»: веранда работает
+                      со следующего месяца по сентябрь. Купить в апреле — весь сезон, в последний момент — не окупится.
+                    </p>
                   </div>
                 </CardContent>
               </Card>
@@ -430,7 +479,6 @@ export function SetupWizard() {
                     <Row label={`Ремонт (${RENOVATION_LEVELS[renovation].label.toLowerCase()})`} value={money(-costs.renovationCost)} />
                     <Row label="Оборудование" value={money(-costs.equipmentCost)} />
                     <Row label={`Депозит (${loc.depositMonths} мес аренды)`} value={money(-costs.deposit)} />
-                    {veranda && <Row label="Веранда" value={money(-costs.verandaCost)} />}
                     {alcohol && <Row label="Лицензия на алкоголь" value={money(-costs.licenseCost)} />}
                     <div className="border-t border-stone-100 my-2" />
                     <Row label="Остаток на оборотку и запас" value={money(costs.left)} tone={costs.left >= 1_500_000 ? 'good' : 'bad'} bold />
@@ -510,8 +558,13 @@ export function SetupWizard() {
                       className="mt-1"
                       maxLength={40}
                     />
+                    <p className="text-xs text-stone-400 mt-1.5">
+                      Игрок: <span className="font-semibold text-stone-600">{nickTrim}</span> — под этим ником
+                      результат года уйдёт в рейтинг (сменить можно на первом шаге визарда).
+                    </p>
                   </div>
                   <div className="rounded-xl bg-stone-50 p-4 space-y-1.5 text-sm">
+                    <Row label="Ник в рейтинге" value={nickTrim} />
                     <Row label="Сложность" value={`${diff.name} · победа с ${moneyShort(diff.winConditions.minCumulativeProfit)} прибыли и рейтингом ${diff.winConditions.minRating}`} />
                     <Row label="Район" value={loc.name} />
                     <Row label="Помещение" value={`${prem.label}: ${prem.seats} мест, ${prem.areaM2} м²`} />
@@ -529,6 +582,7 @@ export function SetupWizard() {
                     onClick={launch}
                     size="lg"
                     className="w-full bg-amber-600 hover:bg-amber-700 text-white text-base"
+                    disabled={!nickValid}
                   >
                     <Rocket className="h-5 w-5 mr-2" aria-hidden />
                     Открыть ресторан!
@@ -554,6 +608,7 @@ export function SetupWizard() {
             <Button
               onClick={() => setStep((s) => s + 1)}
               disabled={!canNext()}
+              title={step === 0 && !nickValid ? 'Введите ник (2–24 символа)' : undefined}
               className="bg-stone-800 hover:bg-stone-900 text-white"
             >
               Далее

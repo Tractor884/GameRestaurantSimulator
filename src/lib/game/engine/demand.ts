@@ -113,10 +113,15 @@ export function qualityPerceptionFactor(state: GameState): number {
   return Math.max(0.5, Math.min(1.3, 0.5 + rating / 10));
 }
 
-/** EventFactor ∈ [0.3, 2.0]: произведение активных бустов спроса. */
+/** EventFactor ∈ [0.3, 2.0]: произведение активных бустов спроса.
+ *  ЕДИНАЯ СИСТЕМА «СОБЫТИЯ = ДИЛЕММЫ»: работают ТОЛЬКО разрешённые события
+ *  (синтетические носители demand-эффекта — relocation_downturn и клоны
+ *  решённых веток) — нерешённое событие НИЧЕГО не меняет, пока игрок
+ *  (или авто-закрытие по просрочке) не выбрал ветку. */
 export function eventDemandFactor(state: GameState, week: number): number {
   let f = 1;
   for (const e of state.activeEvents) {
+    if (!e.resolved) continue;
     if (e.effect.demandBoost && e.effect.demandBoostWeeks) {
       const until = e.date.week + e.effect.demandBoostWeeks;
       if (week <= until) f *= e.effect.demandBoost;

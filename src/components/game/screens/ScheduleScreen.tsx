@@ -12,10 +12,101 @@ import { hourlyRate, dayCoverage } from '@/lib/game/engine/staff';
 import { DAYS_RU } from '@/lib/game/engine';
 import { HintedLabel } from '../hints';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
-import { CalendarDays, Info, Activity } from 'lucide-react';
+import {
+  CalendarDays,
+  Info,
+  Activity,
+  Calculator,
+  ChevronDown,
+  GraduationCap,
+  TrendingUp,
+} from 'lucide-react';
 import type { RoleId, StationType } from '@/lib/game/types';
+
+/** Станция → роли, которые её укомплектовывают (вес > 0 в STAFF_ROLES). */
+const STATION_ROLE_MAP: { station: StationType; roleId: RoleId; weight: number }[] = (() => {
+  const list: { station: StationType; roleId: RoleId; weight: number }[] = [];
+  for (const role of Object.values(STAFF_ROLES)) {
+    for (const [st, w] of Object.entries(role.stationWeights)) {
+      if ((w ?? 0) > 0) list.push({ station: st as StationType, roleId: role.id, weight: w ?? 0 });
+    }
+  }
+  return list;
+})();
+
+/** Роли станции по убыванию веса (хостес/посудомойщик — не станции). */
+function stationRoleIds(station: StationType): RoleId[] {
+  return STATION_ROLE_MAP.filter((r) => r.station === station)
+    .sort((a, b) => b.weight - a.weight)
+    .map((r) => r.roleId);
+}
+
+/** Расширенные данные станции для умных советов (26-ui, задача 3б). */
+interface StationAdvice {
+  station: StationType;
+  peak: number;
+  top3: number;
+  /** Все роли станции (вес > 0). */
+  roles: RoleId[];
+  /** Нанятые роли станции. */
+  hired: RoleId[];
+  /** Минимум людей роли по всем 14 сменам недели (7 дней × утро/вечер). */
+  roleMin: Map<RoleId, number>;
+  /** Минимальный суммарный состав станции по сменам. */
+  stationMin: number;
+  /** Роли, в какой-то смене работающие в одиночку (минимум по сменам = 1). */
+  soloRoles: RoleId[];
+  /** Роли, в каждой смене представленные ≥2 людьми. */
+  multiRoles: RoleId[];
+}
+
+/** Текст совета по станции с учётом того, кто реально стоит в сменах. */
+function stationAdviceText(s: StationAdvice): { tone: 'red' | 'amber' | 'emerald' | 'stone'; text: string } {
+  const roleNames = (ids: RoleId[]) => ids.map((id) => STAFF_ROLES[id].shortName).join(', ');
+  if (s.top3 > 1.15) {
+    return {
+      tone: 'red',
+      text: `не хватает мощности — добавьте смену/людей: ${roleNames(s.hired.length > 0 ? s.hired : s.roles)}`,
+    };
+  }
+  if (s.top3 >= 0.85) return { tone: 'emerald', text: 'оптимум 85–115%' };
+  // top3 < 0.85 — мощность станции с запасом.
+  if (s.stationMin === 0 && s.top3 > 0.3) {
+    return { tone: 'red', text: 'смена НЕ закрыта — станция без персонала!' };
+  }
+  if (s.soloRoles.length > 0) {
+    if (s.station === 'coffee') {
+      return {
+        tone: 'amber',
+        text: 'бариста один на смену — снимать смену нельзя, сократите штат либо держите резерв на болезни',
+      };
+    }
+    return {
+      tone: 'amber',
+      text: `запас мощности есть, но смена нужна для покрытия: ${roleNames(s.soloRoles)} — 1 чел/смену. Вместо снятия смены — сократите штат на 1 (экран «Персонал»), если запас держится 2+ недели`,
+    };
+  }
+  if (s.hired.length > 0 && s.multiRoles.length === s.hired.length) {
+    return { tone: 'emerald', text: `есть запас — одну смену роли можно убрать: ${roleNames(s.hired)}` };
+  }
+  if (s.multiRoles.length > 0) {
+    return {
+      tone: 'emerald',
+      text: `есть запас — смену можно убрать только у ролей с ≥2 чел в каждой смене: ${roleNames(s.multiRoles)}`,
+    };
+  }
+  return {
+    tone: 'stone',
+    text:
+      s.hired.length === 0
+        ? 'персонал станции не нанят'
+        : 'запас есть, но штат уже минимален для покрытия — убирать смены нельзя',
+  };
+}
 
 export function ScheduleScreen() {
   const state = useGame((s) => s.state)!;
@@ -79,6 +170,33 @@ export function ScheduleScreen() {
     return out.sort((a, b) => b.top3 - a.top3);
   }, [state.history.dayLogs]);
 
+  // 26-ui (задача 3б): кто реально стоит в сменах станции — минимум людей
+  // по 14 сменам недели для каждой роли и для станции суммарно.
+  const stationAdvice = useMemo<StationAdvice[]>(() => {
+    return stationPeaks.map((s) => {
+      const roles = stationRoleIds(s.station);
+      const hired = roles.filter((id) => (staff.pools[id]?.count ?? 0) > 0);
+      const roleMin = new Map<RoleId, number>();
+      let stationMin = Infinity;
+      for (let d = 0; d < 7; d++) {
+        for (const part of ['morning', 'evening'] as const) {
+          let total = 0;
+          for (const id of roles) {
+            const sh = staff.schedule[id]?.[d];
+            const n = sh ? (part === 'morning' ? sh.morning : sh.evening) : 0;
+            total += n;
+            roleMin.set(id, Math.min(roleMin.get(id) ?? Infinity, n));
+          }
+          stationMin = Math.min(stationMin, total);
+        }
+      }
+      if (!Number.isFinite(stationMin)) stationMin = 0;
+      const soloRoles = hired.filter((id) => (roleMin.get(id) ?? 0) === 1);
+      const multiRoles = hired.filter((id) => (roleMin.get(id) ?? 0) >= 2);
+      return { ...s, roles, hired, roleMin, stationMin, soloRoles, multiRoles };
+    });
+  }, [stationPeaks, staff]);
+
   return (
     <div className="space-y-4">
       {lowCoverageDays.length > 0 && (
@@ -91,6 +209,7 @@ export function ScheduleScreen() {
       )}
 
       <SectionCard title="Сетка смен на неделю" icon={CalendarDays}>
+        <ScheduleCalcHint />
         <div className="overflow-x-auto">
           <Table className="min-w-[900px]">
             <TableHeader>
@@ -171,45 +290,74 @@ export function ScheduleScreen() {
           />
         }
       >
-        {stationPeaks.length === 0 ? (
+        {stationAdvice.length === 0 ? (
           <p className="text-sm text-stone-400">Пока нет данных — сыграйте хотя бы день.</p>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {stationPeaks.map((s) => (
-              <div
-                key={s.station}
-                className="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50/60 px-3 py-2"
-              >
-                <span className="text-xs font-medium text-stone-700">{STATIONS[s.station]?.name ?? s.station}</span>
-                <span className="flex items-baseline gap-1">
-                  <span
-                    className={cn(
-                      'text-lg font-bold tabular-nums',
-                      s.top3 > 1.15
-                        ? 'text-red-600'
-                        : s.top3 >= 0.85
-                          ? 'text-emerald-600'
-                          : 'text-stone-400',
-                    )}
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {stationAdvice.map((s) => {
+                const adv = stationAdviceText(s);
+                const people = s.roles
+                  .map((id) => ({ id, count: staff.pools[id]?.count ?? 0, weight: STATION_ROLE_MAP.find((r) => r.station === s.station && r.roleId === id)?.weight ?? 0 }))
+                  .filter((r) => r.count > 0)
+                  .map((r) => `${STAFF_ROLES[r.id].shortName} ×${r.count}`)
+                  .join(', ');
+                const peopleTitle = s.roles
+                  .map((id) => {
+                    const w = STATION_ROLE_MAP.find((r) => r.station === s.station && r.roleId === id)?.weight ?? 0;
+                    return `${STAFF_ROLES[id].name} (вес ${w}) — в штате ${staff.pools[id]?.count ?? 0}`;
+                  })
+                  .join('; ');
+                return (
+                  <div
+                    key={s.station}
+                    className="flex flex-col gap-1 rounded-lg border border-stone-100 bg-stone-50/60 px-3 py-2"
                   >
-                    {(s.top3 * 100).toFixed(0)}%
-                  </span>
-                  <span className="text-[10px] text-stone-400 tabular-nums">макс {(s.peak * 100).toFixed(0)}%</span>
-                </span>
-                <span
-                  className={cn(
-                    'text-[10px] leading-tight',
-                    s.top3 > 1.15
-                      ? 'text-red-500'
-                      : s.top3 >= 0.85
-                        ? 'text-emerald-600'
-                        : 'text-stone-400',
-                  )}
-                >
-                  {s.top3 > 1.15 ? 'не хватает смен/мощности' : s.top3 >= 0.85 ? 'оптимум 85–115%' : 'есть запас — смену можно убрать'}
-                </span>
-              </div>
-            ))}
+                    <span className="text-xs font-medium text-stone-700">{STATIONS[s.station]?.name ?? s.station}</span>
+                    <span className="flex items-baseline gap-1">
+                      <span
+                        className={cn(
+                          'text-lg font-bold tabular-nums',
+                          s.top3 > 1.15
+                            ? 'text-red-600'
+                            : s.top3 >= 0.85
+                              ? 'text-emerald-600'
+                              : 'text-stone-400',
+                        )}
+                      >
+                        {(s.top3 * 100).toFixed(0)}%
+                      </span>
+                      <span className="text-[10px] text-stone-400 tabular-nums">макс {(s.peak * 100).toFixed(0)}%</span>
+                    </span>
+                    <p
+                      className="text-[10px] text-stone-500 leading-tight"
+                      title={peopleTitle}
+                      aria-label={`Люди станции: ${peopleTitle}`}
+                    >
+                      люди: {people || 'не наняты'}
+                    </p>
+                    <span
+                      className={cn(
+                        'text-[10px] leading-tight',
+                        adv.tone === 'red'
+                          ? 'text-red-600 font-medium'
+                          : adv.tone === 'amber'
+                            ? 'text-amber-700'
+                            : adv.tone === 'emerald'
+                              ? 'text-emerald-600'
+                              : 'text-stone-400',
+                      )}
+                    >
+                      {adv.text}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-xs text-stone-400">
+              Советы учитывают, кто реально стоит в сменах: у одиночных ролей (бариста, хостес-функции)
+              снимать смену нельзя — только менять штат.
+            </p>
           </div>
         )}
       </SectionCard>
@@ -267,6 +415,88 @@ export function ScheduleScreen() {
         </SectionCard>
       </div>
     </div>
+  );
+}
+
+/** 26-ui (задача 3а): методичка-калькулятор смен над сеткой. */
+function ScheduleCalcHint() {
+  const setScreen = useGame((s) => s.setScreen);
+  return (
+    <Collapsible defaultOpen={false} className="mb-3">
+      <CollapsibleTrigger className="group flex w-full min-h-11 items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2.5 text-left transition-colors hover:bg-stone-100">
+        <Calculator className="h-4 w-4 shrink-0 text-amber-700" aria-hidden />
+        <span className="text-sm font-medium text-stone-800">Как рассчитать нужные смены и людей</span>
+        <ChevronDown
+          className="ml-auto h-4 w-4 shrink-0 text-stone-400 transition-transform group-data-[state=open]:rotate-180"
+          aria-hidden
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div
+          role="region"
+          aria-label="Методичка: как рассчитать необходимое количество смен и сотрудников на неделю"
+          className="mt-2 space-y-3 rounded-lg border border-stone-200 bg-stone-50/60 p-4 text-sm text-stone-700"
+        >
+          <div>
+            <p className="font-semibold text-stone-800">1. Пропускная способность на человека</p>
+            <ul className="mt-1 grid list-disc gap-x-4 gap-y-0.5 pl-4 text-xs text-stone-600 sm:grid-cols-2">
+              <li>официант — ~12 гостей/час;</li>
+              <li>хостес — ~45 гостей/час (посадка);</li>
+              <li>повар горячего цеха — ~14 блюд/час;</li>
+              <li>повар холодного цеха — ~22 блюда/час;</li>
+              <li>заготовщик — ~30 заготовок/час;</li>
+              <li>бариста — ~40 напитков/час;</li>
+              <li>посудомойщик — ~70 предметов/час;</li>
+              <li>уборщик — ~45 посадок/час.</li>
+            </ul>
+          </div>
+          <div>
+            <p className="font-semibold text-stone-800">2. Формула</p>
+            <p className="mt-1 text-xs leading-relaxed">
+              людей в смену = <b>пиковая нагрузка часа ÷ норма на человека × 1,15</b> (запас на болезни и
+              отпуска). Пиковую нагрузку часа смотрите в «Загрузке станций» ниже (топ-3 часа) и на
+              главном экране (почасовой график гостей).
+            </p>
+          </div>
+          <div>
+            <p className="font-semibold text-stone-800">3. Правило пула</p>
+            <p className="mt-1 text-xs leading-relaxed">
+              штат роли ≥ max(утро, вечер) худшего дня недели — иначе график не закрыт (покрытие
+              &lt;100%, см. KPI «Ср. покрытие» внизу экрана).
+            </p>
+          </div>
+          <div>
+            <p className="font-semibold text-stone-800">4. Норма занятости</p>
+            <p className="mt-1 text-xs leading-relaxed">
+              1 сотрудник ≈ 5–6 смен × 8 ч в неделю (40-часовая неделя). Пример: нужно 2 официанта
+              утром и 3 вечером все 7 дней = 35 смен/нед → 35 ÷ 5,5 ≈ <b>7 официантов в штате</b>.
+            </p>
+          </div>
+          <div>
+            <p className="font-semibold text-stone-800">5. Пример расчёта для зала на 70 мест</p>
+            <p className="mt-1 text-xs leading-relaxed">
+              Пик ужина субботы ~65 гостей/час → хостес: 65 ÷ 45 ≈ 1,4 → <b>2 хостес</b> в вечер;
+              официанты: 65 ÷ 12 ≈ 5,4 → <b>6 официантов</b> в вечер.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-10"
+              onClick={() => setScreen('restaurant')}
+            >
+              <TrendingUp className="h-4 w-4 mr-1.5 text-amber-700" aria-hidden />
+              Смотреть почасовой график
+            </Button>
+            <Button variant="outline" size="sm" className="h-10" onClick={() => setScreen('academy')}>
+              <GraduationCap className="h-4 w-4 mr-1.5 text-amber-700" aria-hidden />
+              Академия: планирование смен
+            </Button>
+          </div>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 

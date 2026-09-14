@@ -232,6 +232,17 @@ export interface StaffState {
   pools: Record<RoleId, StaffPool>;
   /** График: роль → день недели (0..6) → смены. */
   schedule: Record<RoleId, StaffShifts[]>;
+  /** ТЕКУЧЕСТЬ (26-b): счётчики найма/увольнений за игру + недельные
+   *  снапшоты штатной численности (последние 13 недель = «квартал» для KPI
+   *  текучести; снапшот пишется на закрытии недели ПОСЛЕ увольнений недели). */
+  turnover?: {
+    hiredTotal: number;
+    quitTotal: number; // ушли сами (мораль/события/шеф)
+    firedTotal: number; // уволены игроком
+    /** Неденедельные срезы штата; quitFired — накопленные quit+fired
+     *  НА МОМЕНТ снапшота (Δ окна снапшотов = текучесть квартала). */
+    snapshots: { week: number; headcount: number; quitFired?: number }[];
+  };
   /** Медстраховка персонала: 4% недельного ФОТ, мораль стабильнее,
    *  риск увольнений ×0.6 (миграция v6). */
   insurance?: boolean;
@@ -265,6 +276,19 @@ export interface MarketingState {
 
 export interface LicenseState {
   alcohol: { active: boolean; paidUntil: GameDate | null; annualCost: number } | null;
+  /** Сезонная летняя веранда (26-b): разрешение покупается с апреля на
+   *  вкладке «Лицензии»; работает с boughtMonth+1 по сентябрь; в октябре
+   *  обязателен демонтаж (иначе порча мебели + юр. риск). */
+  veranda?: {
+    boughtWeek: number;
+    boughtMonth: number; // 4=апрель … 9=сентябрь (опоздавшим сезон не окупится)
+    /** Демонтирована (вовремя или с экрана «Лицензии»). */
+    removed?: boolean;
+    /** Неделя демонтажа (для статуса на «Лицензиях»). */
+    removedWeek?: number;
+    /** Мебель/оборудование испорчены (ветка «оставить до весны»). */
+    spoiled?: boolean;
+  };
 }
 
 export interface LoanState {
@@ -556,6 +580,9 @@ export interface HourLog {
   satisfaction: number; // 0..100
   stationLoads: Partial<Record<StationType, number>>; // нагрузка станций
   waiterLoad: number;
+  /** Среднее ожидание СЕВШИХ за час, мин (26-b: видимость работы хостес;
+   *  «хостес не справляется → очередь растёт → ожидание длиннее»). */
+  waitMinutes?: number;
 }
 
 export interface DayKPI {
@@ -578,6 +605,9 @@ export interface DayKPI {
   /** ТЕЛЕМЕТРИЯ: выручка и себестоимость (оценка по техкартам) по категориям блюд. */
   categoryRevenue: Partial<Record<DishCategory, number>>;
   categoryCogs: Partial<Record<DishCategory, number>>;
+  /** Средневзвешенное ожидание севших гостей за день, мин (26-b).
+  *  Вес — число севших в часе (часLogs.waitMinutes × seated). */
+  avgWaitMinutes?: number;
 }
 
 export interface DayLog {
@@ -649,10 +679,19 @@ export interface GameEvent {
   effect: GameEventEffect;
   resolved: boolean;
   resolutionNote?: string;
+  /** ЕДИНАЯ СИСТЕМА «СОБЫТИЯ = ДИЛЕММЫ» (запрос пользователя): неделя,
+   *  после закрытия которой нерешённое событие закрывается автоматически
+   *  (взвешенный случайный выбор 3:1 в пользу негативного исхода).
+   *  Если не задано — считается date.week + 2. */
+  deadlineWeek?: number;
   /** Динамические резолюции системных событий (дилеммы §15, дивиденды §13,
    *  арендодатель §6, уход шефа) — приоритетнее шаблона (v8). */
   resolutions?: EventResolution[];
 }
+
+/** Тональность исхода ветки решения — для взвешенного авто-выбора просроченных
+ *  событий (вес negative = 3, прочие = 1) и подсказки игроку в UI. */
+export type EventTone = 'negative' | 'neutral' | 'positive';
 
 /** Вариант реакции игрока. Базовые поля совместимы с шаблонами risks.config;
  *  спец-теги включают собственную логику применения в resolveEvent. */
@@ -671,8 +710,13 @@ export interface EventResolution {
   ownerRefuse?: { trust: number; risk: number };
   /** Цепочка арендодателя (§6). */
   landlord?: 'accept' | 'refuse' | 'accept_ultimatum' | 'relocate';
+  /** Сезонная веранда (26-b): демонтаж вовремя / оставить до весны. */
+  veranda?: 'dismantle' | 'leave';
   /** Платный найм замены (уход шефа). */
   hire?: { roleId: RoleId };
+  /** Тональность исхода (авто-закрытие просрочки 3:1 в пользу негативного,
+   *  иконка-подсказка в UI). Отсутствие тона = нейтральная ветка. */
+  tone?: EventTone;
 }
 
 /* ============================= BSC / ПРОГНОЗ ============================= */
@@ -861,6 +905,10 @@ export interface HistoryState {
   /** История квартальных разборов (v9): переживает затирание weekResult
    *  следующей неделей — экран «Квартальный разбор» показывает все. */
   quarterlyReviews?: QuarterlyReview[];
+  /** Решённые события (v11, единая система «события = дилеммы»): журнал
+   *  последних решений с заметкой об исходе — переживает обрезку dayLogs
+   *  (7 дней) и затирание weekResult; экран «События» показывает в истории. */
+  resolvedEvents?: GameEvent[];
 }
 
 export interface GameState {
@@ -871,6 +919,10 @@ export interface GameState {
   phase: GamePhase;
   status: GameStatus;
   difficultyId: string;
+  /** Ник игрока (Task 28: регистрация по нику для рейтинга среди друзей).
+   *  Опционально — старые сейвы (до Task 28) ника не имеют; финальный экран
+   *  в этом случае предложит ввести ник перед отправкой в рейтинг. */
+  playerNick?: string;
   /** Пользовательские настройки геймплея (мигрируются: v4). */
   options: GameOptions;
   restaurant: Restaurant | null;

@@ -28,8 +28,13 @@ export {
   deepCleaning,
   haccpAudit,
   buyAlcoholLicense,
+  buyVerandaPermit,
+  dismantleVeranda,
+  verandaSeasonMonths,
   repayLoan,
   resolveEvent,
+  applyEventResolution,
+  autoResolveOverdueEvents,
   setAutoPurchase,
   setProcurementPolicy,
   replyToReviews,
@@ -97,6 +102,14 @@ export { checkInvariants } from './invariants';
 export { fmtMoney, fmtNum, fmtPct, workingHours, dayIndex, DAYS_RU } from './core';
 export { avgCategoryPrices, estimatedCheck, marketingFactor, potentialDailyDemand } from './demand';
 export { stationCapacity, effectiveStaff, staffOnDuty, hourlyRate, dayCoverage, averageFatigue } from './staff';
+export {
+  noteHired,
+  noteFired,
+  noteQuit,
+  noteTurnoverSnapshot,
+  quarterTurnoverPct,
+} from './staff';
+export { MONTHS_RU, MONTHS_RU_GEN, MONTHS_RU_PREP } from '../config/demandProfiles.config';
 export { recipeCost, recipeFoodCost } from '../content/dishes';
 export { DISHES, DISHES_MAP, STARTER_MENU_IDS } from '../content/dishes';
 export { INGREDIENTS, INGREDIENTS_MAP, INGREDIENT_CATEGORIES } from '../content/ingredients';

@@ -28,6 +28,7 @@ import { serviceStatus, wearMult, breakMult } from '../config/equipmentService.c
 import { haccpStatus, haccpTargetMult } from '../config/haccp.config';
 import { eventFineMult } from './permanent';
 import { menuFreshnessFactor } from './menufatigue';
+import { noteQuit } from './staff';
 import { deriveRng, hashSeed, type Rng } from '../rng';
 import { clamp, dayIndex, addTransaction } from './core';
 
@@ -436,7 +437,10 @@ export function instantiateEvent(template: EventTemplate, date: GameDate): GameE
   };
 }
 
-/** Применить эффекты некритического события (немедленно). */
+/** Применить эффекты некритического события (немедленно).
+ *  ЕДИНАЯ СИСТЕМА «СОБЫТИЯ = ДИЛЕММЫ»: движок БОЛЬШЕ НЕ ВЫЗЫВАЕТ эту функцию
+ *  (эффекты применяются в момент решения — setup.applyEventResolution).
+ *  Экспорт сохранён для совместимости/диагностики. */
 export function applyEventEffects(state: GameState, restaurant: Restaurant, event: GameEvent): void {
   const e = event.effect;
   if (e.cash && e.cash !== 0) {
@@ -466,21 +470,37 @@ export function applyEventEffects(state: GameState, restaurant: Restaurant, even
     }
   }
   if (e.staffQuit) {
-    // ДЕТЕРМИННИЗМ (§21): Math.random в движке был ЗАПРЕЩЁН, но здесь
-    // доживал исторический вызов — полная игра (52 нед) не была
-    // воспроизводимой. Роль уходит детерминированно: поток 'staff-quit'
-    // от seed × дня события (все существующие броски не тронуты).
-    const rng = deriveRng(hashSeed(state.seed, dayIndex(event.date)), 'staff-quit');
-    const roles = ['hot_cook', 'waiter', 'cold_cook', 'dishwasher'] as const;
-    const role = roles[Math.floor(rng.next() * roles.length)];
-    const pool = restaurant.staff.pools[role];
-    if (pool && pool.count > 1) pool.count -= 1;
+    quitStaffRole(state, restaurant, event, e.staffQuit);
   }
   if (e.equipmentBreak) {
     restaurant.equipment.coffee.wear = clamp(restaurant.equipment.coffee.wear + 25, 0, 100);
   }
   event.resolved = true;
   state.activeEvents.push(event);
+}
+
+/** Детерминированный уход `count` сотрудников после события.
+ *  ДЕТЕРМИННИЗМ (§21): Math.random в движке ЗАПРЕЩЁН — роль выбирается
+ *  потоком 'staff-quit' от seed × дня события (все существующие броски
+ *  не тронуты). Хелпер переиспользуется setup.applyEventResolution —
+ *  тот же поток, те же результаты. */
+export function quitStaffRole(
+  state: GameState,
+  restaurant: Restaurant,
+  event: GameEvent,
+  count: number,
+): void {
+  const rng = deriveRng(hashSeed(state.seed, dayIndex(event.date)), 'staff-quit');
+  const roles = ['hot_cook', 'waiter', 'cold_cook', 'dishwasher'] as const;
+  for (let i = 0; i < Math.max(1, Math.round(count)); i++) {
+    const role = roles[Math.floor(rng.next() * roles.length)];
+    const pool = restaurant.staff.pools[role];
+    if (pool && pool.count > 1) {
+      pool.count -= 1;
+      // ТЕКУЧЕСТЬ (26-b): уход по событию — в счётчик quits.
+      noteQuit(restaurant, 1);
+    }
+  }
 }
 
 /* ============================= ЧИСТОТА, КОМФОРТ, ИЗНОС ============================= */

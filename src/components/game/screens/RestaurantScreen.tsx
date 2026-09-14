@@ -1,15 +1,26 @@
 /**
  * Главный экран ресторана (ТЗ §31.1–31.3): виджеты KPI, отчёт последнего дня,
- * почасовая динамика, предупреждения, мини-BSC.
+ * почасовая динамика (выручка + ожидание до посадки, 27-b), предупреждения,
+ * мини-BSC.
  */
 'use client';
 
 import { useMemo } from 'react';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import {
+  ComposedChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+  Line,
+} from 'recharts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useGame } from '@/lib/game/store/gameStore';
 import { KpiCard, SectionCard, WarningBanner, ScoreBar, RangeBadge, money, moneyShort, EmptyState } from '../widgets';
-import { InfoHint } from '../hints';
+import { InfoHint, type HintContent } from '../hints';
+import { SATISFACTION } from '@/lib/game/config/satisfaction.config';
 import { dishOf } from '@/lib/game/content/resolve';
 import { DAYS_RU } from '@/lib/game/engine';
 import { HallScene } from '../HallScene';
@@ -29,7 +40,22 @@ import {
   DoorOpen,
   MapPin,
   ImageIcon,
+  Timer,
 } from 'lucide-react';
+
+/** Подсказка KPI «Ожидание сегодня» — нормы из конфига удовлетворённости
+ *  (SATISFACTION.expectedWaitMinutes / waitPenaltyPerMinute, ТЗ §15.3). */
+const WAIT_HINT: HintContent = {
+  title: 'Ожидание сегодня',
+  body: `Среднее время от прихода в ресторан до посадки за последний день. Гости готовы ждать около ${SATISFACTION.expectedWaitMinutes} минут: каждая минута сверх нормы отнимает ${SATISFACTION.waitPenaltyPerMinute} очка удовлетворённости.`,
+  advice:
+    'Ожидание растёт, когда хостес не успевает сажать гостей, а официанты — обслуживать. Добавьте смены в пиковые часы (экран «Графики»), иначе очередь превратится в потерянных гостей и плохие отзывы.',
+};
+
+/** «9,4 мин» — одна десятая минуты, запятая как разделитель ru-RU. */
+function fmtMinutes(v: number): string {
+  return `${v.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} мин`;
+}
 
 export function RestaurantScreen() {
   const state = useGame((s) => s.state)!;
@@ -48,9 +74,29 @@ export function RestaurantScreen() {
         revenue: Math.round(h.revenue),
         seated: h.seated,
         demand: h.demand,
+        // 26-b → 27-b: ожидание севшихся в часе, мин (может отсутствовать
+        // у старых сейвов и «пустых» часов — тогда линия рвётся).
+        wait: h.waitMinutes,
       })),
     [lastDay],
   );
+
+  /** Есть ли вообще почасовое ожидание (правая ось рисуется только с ним). */
+  const hasWaitData = useMemo(() => hourData.some((h) => typeof h.wait === 'number'), [hourData]);
+
+  /** KPI «Ожидание сегодня»: средневзвешенное ожидание севшихся за день.
+   *  Нет дня / 0 гостей / нет поля (старый сейв) — аккуратный прочерк. */
+  const waitAvg = lastDay?.kpi.avgWaitMinutes ?? null;
+  const waitKnown = !!lastDay && lastDay.kpi.guests > 0 && waitAvg !== null;
+  const waitValue = waitKnown && waitAvg !== null ? fmtMinutes(waitAvg) : '—';
+  const waitTone: 'default' | 'good' | 'warn' | 'bad' =
+    !waitKnown || waitAvg === null
+      ? 'default'
+      : waitAvg <= 8
+        ? 'good'
+        : waitAvg <= 15
+          ? 'warn'
+          : 'bad';
 
   const revenueTrend =
     lastWeek && prevWeek && prevWeek.revenue > 0 ? lastWeek.revenue / prevWeek.revenue - 1 : undefined;
@@ -62,8 +108,9 @@ export function RestaurantScreen() {
 
   return (
     <div className="space-y-4">
-      {/* Виджеты (ТЗ §31.3) */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+      {/* Виджеты (ТЗ §31.3). 7-я карточка — «Ожидание сегодня» (27-b): на
+          мобайле занимает всю строку, на xl — седьмая колонка. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
         <KpiCard icon={Banknote} label="Деньги" value={moneyShort(restaurant.finance.cash)} sub="на счёте" hint="cash" tone={restaurant.finance.cash > 1_000_000 ? 'good' : 'bad'} />
         <KpiCard
           icon={Receipt}
@@ -104,6 +151,18 @@ export function RestaurantScreen() {
           hint="rating"
           tone={restaurant.reputation.rating >= 4.2 ? 'good' : restaurant.reputation.rating >= 3.8 ? 'warn' : 'bad'}
         />
+        {/* Обёртка — чтобы Card тянулась на высоту соседей (KpiCard не
+            принимает className) и на мобайле занимала всю ширину строки. */}
+        <div className="col-span-2 md:col-span-1 [&>div]:h-full">
+          <KpiCard
+            icon={Timer}
+            label="Ожидание сегодня"
+            value={waitValue}
+            sub={waitKnown ? 'среднее до посадки' : 'нет данных дня'}
+            hint={WAIT_HINT}
+            tone={waitTone}
+          />
+        </div>
       </div>
 
       {/* Туториал первых недель + контекстные советы (аудит №15) */}
@@ -161,9 +220,20 @@ export function RestaurantScreen() {
                 <Stat label="COGS" value={money(lastDay.kpi.cogs)} hint="foodCost" />
                 <Stat label="Порча" value={money(lastDay.kpi.wasteCost)} tone={lastDay.kpi.wasteCost > 20_000 ? 'bad' : 'neutral'} hint="waste" />
               </div>
-              <div className="h-56">
+              <div
+                className="h-56"
+                role="img"
+                aria-label={
+                  hasWaitData
+                    ? 'Почасовой график: выручка по часам (левая ось) и среднее ожидание до посадки в минутах (правая ось)'
+                    : 'Почасовой график выручки по часам'
+                }
+              >
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={hourData} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
+                  {/* ComposedChart вместо AreaChart: только он умеет миксовать
+                      Area (выручка) и Line (ожидание) — AreaChart молча игнорирует
+                      Line (GraphicalChild = Area, recharts 2.15). */}
+                  <ComposedChart data={hourData} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
                     <defs>
                       <linearGradient id="revGradient" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#d97706" stopOpacity={0.3} />
@@ -171,17 +241,59 @@ export function RestaurantScreen() {
                       </linearGradient>
                     </defs>
                     <XAxis dataKey="hour" tick={{ fontSize: 10, fill: '#78716c' }} interval={1} />
+                    {/* Левая ось — выручка (как раньше, ось по умолчанию). */}
                     <YAxis tick={{ fontSize: 10, fill: '#78716c' }} tickFormatter={(v: number) => `${Math.round(v / 1000)}к`} />
+                    {/* Правая ось — ожидание до посадки (27-b): рисуем только
+                        когда есть данные, чтобы не трогать старые сейвы. */}
+                    {hasWaitData && (
+                      <YAxis
+                        yAxisId="wait"
+                        orientation="right"
+                        domain={[0, (dataMax: number) => Math.max(10, dataMax)]}
+                        allowDecimals={false}
+                        width={26}
+                        tick={{ fontSize: 10, fill: '#b91c1c' }}
+                      />
+                    )}
                     <Tooltip
                       formatter={(value: number, name: string) =>
-                        name === 'revenue' ? [money(value), 'Выручка'] : [value, 'Посажено']
+                        name === 'revenue'
+                          ? [money(value), 'Выручка']
+                          : name === 'wait'
+                            ? [`${value} мин`, 'Ожидание до посадки']
+                            : [value, 'Посажено']
                       }
                       contentStyle={{ borderRadius: 8, border: '1px solid #e7e5e4', fontSize: 12 }}
                     />
                     <Area type="monotone" dataKey="revenue" stroke="#d97706" strokeWidth={2} fill="url(#revGradient)" />
+                    {hasWaitData && (
+                      <Line
+                        yAxisId="wait"
+                        type="monotone"
+                        dataKey="wait"
+                        stroke="#b91c1c"
+                        strokeWidth={2}
+                        dot={{ r: 2, fill: '#b91c1c', strokeWidth: 0 }}
+                        activeDot={{ r: 3.5 }}
+                        connectNulls={false}
+                      />
+                    )}
                     <ReferenceLine y={0} stroke="#e7e5e4" />
-                  </AreaChart>
+                  </ComposedChart>
                 </ResponsiveContainer>
+              </div>
+              {/* Мини-легенда: какая линия что означает (27-b). */}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-stone-500">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2.5 w-3 rounded-sm bg-amber-600/60" aria-hidden />
+                  Выручка по часам
+                </span>
+                {hasWaitData && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-0.5 w-4 rounded bg-red-700" aria-hidden />
+                    Ожидание до посадки, мин — правая ось
+                  </span>
+                )}
               </div>
               {topDishes.length > 0 && (
                 <div>

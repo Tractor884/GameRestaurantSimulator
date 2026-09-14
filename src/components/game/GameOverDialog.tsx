@@ -11,9 +11,15 @@
  * Требование пользователя: окно НЕ закрывается само — пользователь сам решает,
  * когда закрыть (кнопка). После закрытия в топбаре остаётся кнопка «Результаты»,
  * возвращающая этот экран в любой момент.
+ *
+ * Task 28 («играть с друзьями»): при открытии финала результат года
+ * автоматически отправляется в общий рейтинг (POST /api/leaderboard —
+ * однократно, useRef-защита от повторов; старый сейв без ника → поле
+ * ручного ввода) + секция «Рейтинг игроков» с топ-50 (LeaderboardTable).
  */
 'use client';
 
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useGame } from '@/lib/game/store/gameStore';
 import { STATUS_LABELS } from '@/lib/game/config/difficulty.config';
 import { FINAL_SCORE_WEIGHTS } from '@/lib/game/config/bsc.config';
@@ -28,8 +34,10 @@ import {
   scoreBandRange,
 } from '@/lib/game/engine';
 import { ScoreBar, money, moneyShort } from './widgets';
+import { LeaderboardTable } from './LeaderboardTable';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import {
@@ -45,13 +53,136 @@ import {
   MapPin,
   Sparkles,
   Lightbulb,
+  CheckCircle2,
+  RotateCw,
+  Send,
 } from 'lucide-react';
+
+/** Тело POST /api/leaderboard (Task 28). */
+interface LeaderboardPost {
+  nick: string;
+  restaurantName: string;
+  level: string;
+  score: number;
+  difficulty: string;
+  weeksLived: number;
+}
+
+/** localStorage-ключ отпечатков уже отправленных финалов (Task 28):
+ *  защищает от ПОВТОРНОЙ авто-отправки после перезагрузки страницы
+ *  (useRef живёт только до reload, а автосейв с gameover грузится снова). */
+const SUBMITTED_KEY = 'rest-sim-submitted';
+
+/** Отпечаток финала: nick + seed + очки + недели — уникален для попытки. */
+function finalFingerprint(nick: string, seed: number, score: number, weeks: number): string {
+  return `${nick}|${seed}|${Math.round(score)}|${weeks}`;
+}
+
+function isFinalSubmitted(fp: string): boolean {
+  try {
+    const raw = window.localStorage.getItem(SUBMITTED_KEY);
+    return !!raw && (JSON.parse(raw) as string[]).includes(fp);
+  } catch {
+    return false;
+  }
+}
+
+function markFinalSubmitted(fp: string): void {
+  try {
+    const raw = window.localStorage.getItem(SUBMITTED_KEY);
+    const arr = raw ? (JSON.parse(raw) as string[]) : [];
+    const next = [...arr.filter((x) => x !== fp), fp].slice(-20);
+    window.localStorage.setItem(SUBMITTED_KEY, JSON.stringify(next));
+  } catch {
+    /* приватный режим браузера — не критично */
+  }
+}
 
 export function GameOverDialog() {
   const state = useGame((s) => s.state);
   const finalSeen = useGame((s) => s.finalSeen);
   const hideFinal = useGame((s) => s.hideFinal);
   const resetGame = useGame((s) => s.resetGame);
+
+  // ===== Task 28: отправка результата в рейтинг (хуки ДО раннего return) =====
+  const [submitState, setSubmitState] = useState<'idle' | 'sending' | 'ok' | 'error'>('idle');
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [manualNick, setManualNick] = useState('');
+  const [sentNick, setSentNick] = useState<string | null>(null);
+  const [lbRefreshKey, setLbRefreshKey] = useState(0);
+  /** Защита от повторной отправки одного и того же финала. */
+  const submittedRef = useRef(false);
+
+  const sendResult = useCallback(async (nick: string, payload: LeaderboardPost, fp: string) => {
+    setSubmitState('sending');
+    setSubmitError(null);
+    try {
+      const res = await fetch('/api/leaderboard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? `HTTP ${res.status}`);
+      }
+      setSubmitState('ok');
+      setSentNick(nick);
+      setLbRefreshKey((k) => k + 1); // подтянуть свежий рейтинг
+      markFinalSubmitted(fp); // не отправлять этот финал повторно после reload
+      try {
+        window.localStorage.setItem('rest-sim-nick', nick);
+      } catch {
+        /* приватный режим браузера — не критично */
+      }
+    } catch (e) {
+      setSubmitState('error');
+      setSubmitError(e instanceof Error ? e.message : null);
+    }
+  }, []);
+
+  // Выход из финала (новая игра/сброс) — разрешаем отправку следующего финала.
+  useEffect(() => {
+    if (!state || state.phase !== 'gameover') {
+      submittedRef.current = false;
+      setSubmitState('idle');
+      setSubmitError(null);
+      setSentNick(null);
+      setManualNick('');
+    }
+  }, [state]);
+
+  // Однократная авто-отправка при открытии финального экрана (Task 28).
+  // Старый сейв без playerNick не отправляется сам — ниже поле ручного ввода.
+  // Повтор после перезагрузки страницы блокируется отпечатком в localStorage.
+  useEffect(() => {
+    if (!state || state.phase !== 'gameover' || submittedRef.current) return;
+    const nick = state.playerNick?.trim();
+    if (!nick) return;
+    const g = computeFinalGrade(state);
+    const weeks = Math.max(1, Math.min(52, state.history.weekStats.length));
+    const fp = finalFingerprint(nick, state.seed, g.score1000, weeks);
+    if (isFinalSubmitted(fp)) {
+      // этот финал уже в рейтинге (например, страницу перезагрузили)
+      submittedRef.current = true;
+      setSubmitState('ok');
+      setSentNick(nick);
+      return;
+    }
+    submittedRef.current = true;
+    void sendResult(
+      nick,
+      {
+        nick,
+        restaurantName: state.restaurant?.name ?? 'Ресторан',
+        level: g.rank,
+        score: Math.round(g.score1000),
+        difficulty: state.difficultyId,
+        weeksLived: weeks,
+      },
+      fp,
+    );
+  }, [state, sendResult]);
 
   if (!state || state.phase !== 'gameover') return null;
 
@@ -63,6 +194,21 @@ export function GameOverDialog() {
   const restaurant = state.restaurant!;
   const weeksLived = state.history.weekStats.length;
   const hints = axisHints(grade);
+
+  // Task 28: тело отправки + отпечаток финала (для ручных кнопок
+  // «Отправить/Повторить»); авто-отправка выше собирает то же в эффекте.
+  const buildPayload = (nick: string): LeaderboardPost => ({
+    nick,
+    restaurantName: state.restaurant?.name ?? 'Ресторан',
+    level: grade.rank,
+    score: Math.round(grade.score1000),
+    difficulty: state.difficultyId,
+    weeksLived: Math.max(1, Math.min(52, weeksLived)),
+  });
+  const buildFingerprint = (nick: string): string =>
+    finalFingerprint(nick, state.seed, grade.score1000, Math.max(1, Math.min(52, weeksLived)));
+  const meHighlightNick = state.playerNick?.trim() || (submitState === 'ok' ? sentNick : null);
+  const meHighlight = meHighlightNick ? { nick: meHighlightNick, score: Math.round(grade.score1000) } : null;
 
   const HeadIcon =
     state.status === 'bankrupt'
@@ -298,6 +444,95 @@ export function GameOverDialog() {
               <b>«Отличный ресторан»</b> в деталях — то же самое подножие A/A+ с выдающимся BSC и рейтингом 4.5+.
               Статусы («устойчивый», «стабильный») — только фактическая строка итога, категория всегда одна: уровень.
             </p>
+          </div>
+
+          {/* Task 28: результат в рейтинге среди друзей + таблица игроков */}
+          <div className="space-y-3">
+            {/* Статус авто-отправки */}
+            {submitState === 'sending' && (
+              <p className="text-sm text-stone-600 flex items-center gap-2" aria-live="polite">
+                <RotateCw className="h-4 w-4 animate-spin text-amber-600" aria-hidden />
+                ⏳ Отправляем результат в рейтинг…
+              </p>
+            )}
+            {submitState === 'ok' && (
+              <p className="text-sm text-emerald-700 font-medium flex items-center gap-2" aria-live="polite">
+                <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />
+                ✓ Результат отправлен в рейтинг — {grade.score1000} очков, уровень {grade.rank}
+              </p>
+            )}
+            {submitState === 'error' && (
+              <div
+                className="rounded-lg border border-red-200 bg-red-50 p-3 flex items-center justify-between gap-3 flex-wrap"
+                role="alert"
+              >
+                <p className="text-sm text-red-700 min-w-0">
+                  Не удалось отправить — проверьте соединение
+                  {submitError ? <span className="text-red-600/80 text-xs block mt-0.5">{submitError}</span> : null}
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 border-red-300 text-red-700 hover:bg-red-100 shrink-0"
+                  onClick={() => {
+                    const nick = state.playerNick?.trim() || manualNick.trim();
+                    if (nick) void sendResult(nick, buildPayload(nick), buildFingerprint(nick));
+                  }}
+                >
+                  <RotateCw className="h-3.5 w-3.5 mr-1.5" aria-hidden />
+                  Повторить
+                </Button>
+              </div>
+            )}
+
+            {/* Старый сейв без ника: ручной ввод перед отправкой */}
+            {!state.playerNick && submitState !== 'ok' && (
+              <div className="rounded-lg border border-stone-200 bg-stone-50 p-3.5">
+                <label htmlFor="final-nick" className="text-sm font-semibold text-stone-800">
+                  Ник для рейтинга среди друзей
+                </label>
+                <p className="text-xs text-stone-500 mt-0.5 mb-2">
+                  Это сохранение сделано до появления рейтинга — введите ник, чтобы отправить результат года.
+                </p>
+                <div className="flex gap-2 flex-wrap">
+                  <Input
+                    id="final-nick"
+                    value={manualNick}
+                    onChange={(e) => setManualNick(e.target.value)}
+                    className="h-11 bg-white flex-1 min-w-[180px]"
+                    placeholder="Ваш ник (2–24 символа)"
+                    maxLength={24}
+                    autoComplete="nickname"
+                    aria-describedby="final-nick-hint"
+                  />
+                  <Button
+                    className="h-11 bg-amber-600 hover:bg-amber-700 text-white"
+                    disabled={manualNick.trim().length < 2 || manualNick.trim().length > 24 || submitState === 'sending'}
+                    onClick={() => {
+                      const nick = manualNick.trim();
+                      if (nick.length < 2) return;
+                      submittedRef.current = true;
+                      void sendResult(nick, buildPayload(nick), buildFingerprint(nick));
+                    }}
+                  >
+                    <Send className="h-4 w-4 mr-1.5" aria-hidden />
+                    Отправить в рейтинг
+                  </Button>
+                </div>
+                {manualNick.trim().length > 0 && (manualNick.trim().length < 2 || manualNick.trim().length > 24) && (
+                  <p id="final-nick-hint" className="text-xs text-red-600 mt-1.5" role="alert">
+                    Ник нужен для рейтинга — минимум 2 символа (до 24)
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Таблица рейтинга (общий компонент — тот же в «Настройках») */}
+            <LeaderboardTable
+              me={meHighlight}
+              refreshKey={lbRefreshKey}
+              subtitle={`Топ-50 финалов: очки 0–1000, уровень A+…D−. Ваш результат — ${grade.score1000} очков (${grade.rank}).`}
+            />
           </div>
 
           {/* Действия: пользователь сам решает, когда закрыть */}

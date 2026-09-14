@@ -149,6 +149,8 @@ interface HourOrderResult {
   lostItems: number;
   avgDishQuality: number;
   errorRate: number;
+  /** Доля гостей, которых тянут официанты (26-b): бьёт по ServiceQuality. */
+  serviceFulfillment: number;
 }
 
 function generateOrders(
@@ -172,6 +174,7 @@ function generateOrders(
     lostItems: 0,
     avgDishQuality: 0,
     errorRate: 0,
+    serviceFulfillment: 1,
   };
   const picks: { dish: Dish; count: number }[] = [];
 
@@ -245,6 +248,7 @@ function generateOrders(
   const waiters = effectiveStaff(restaurant.staff, 'waiter', date.day, hour);
   const waiterCap = waiters * 12;
   const serviceFulfillment = guestsSeated > 0 ? Math.min(1, waiterCap / guestsSeated) : 1;
+  result.serviceFulfillment = serviceFulfillment;
 
   // Исполнение: FIFO-списание и выручка только по факту (ТЗ §14.9).
   // БАЛ-v2 §9: режим закупки (эконом ↔ премиум) — качество входа в поданных блюдах.
@@ -300,6 +304,7 @@ function computeSatisfaction(
   seated: Record<SegmentId, number>,
   avgWaitSeated: number,
   estCheckBySegment: Record<SegmentId, number>,
+  serviceFulfillment: number,
 ): number {
   const w = SATISFACTION.weights;
   const items = order.itemsSold + 0.001;
@@ -328,9 +333,16 @@ function computeSatisfaction(
   );
 
   // ServiceQuality (ТЗ §15.4).
+  // 26-b (запрос пользователя): мало официантов = медленный сервис =
+  // негативные отзывы. Раньше serviceFulfillment резал только доступность
+  // позиций (availability), теперь штрафует и саму оценку сервиса:
+  // половина официантов от нужного (sf = 0,5) → −20 пунктов ServiceQuality
+  // → Satisfaction ниже → generateReviews (score ≈ satisfaction/20) хуже.
+  // Усталость/мораль официантов завязаны отдельно: roleLoads.waiterLoad →
+  // updateFatigue + targetMorale (день.ts), спираль «перегруз → выгорание».
   const org = organizationFactor(restaurant.staff, date.day, hour);
   const serviceQuality = clamp(
-    100 - order.errorRate * 400 - fatigue * 0.35 - (1 - org) * 150,
+    100 - order.errorRate * 400 - fatigue * 0.35 - (1 - org) * 150 - (1 - serviceFulfillment) * 40,
     0,
     100,
   );
@@ -416,6 +428,7 @@ export function simulateHour(
     seat.seated,
     seat.avgWaitSeated,
     estCheck,
+    order.serviceFulfillment,
   );
 
   // Чаевые (ТЗ §14.11): не выручка ресторана; влияют на мораль (в day.ts).
@@ -442,6 +455,8 @@ export function simulateHour(
     guestsServed: Math.round(seatedTotal),
     orders: Math.round(order.itemsSold),
     queueAvg: Math.round((seat.queueAvg * 10)) / 10,
+    // 26-b: среднее ожидание севших за час (видимость узкого места хостес).
+    waitMinutes: Math.round(seat.avgWaitSeated * 10) / 10,
     satisfaction: Math.round(satisfaction),
     stationLoads: Object.fromEntries(
       Object.entries(order.stationLoads).map(([k, v]) => [k, Math.min(9.99, Math.round((v ?? 0) * 100) / 100)]),

@@ -22,11 +22,20 @@ import {
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { Star, MessageSquare, Flame, ThumbsUp, Filter, MapPin, Megaphone, Inbox, Send } from 'lucide-react';
+import { Star, MessageSquare, Flame, ThumbsUp, Filter, MapPin, Megaphone, Inbox, Send, BellRing } from 'lucide-react';
 import { REVIEWS_V2 } from '@/lib/game/config/reviews.config';
 import type { Review, ReviewSourceId, SegmentId } from '@/lib/game/types';
 
 const ALL = 'all';
+
+/** Диапазоны корзин гистограммы — согласованы с порогом ответа ≤3,5★. */
+const BUCKET_RANGES: Record<number, string> = {
+  1: 'ниже 1,5★',
+  2: '1,5–2,5★',
+  3: '2,5–3,5★ — сюда входит весь негатив ≤3,5★',
+  4: '3,5–4,5★',
+  5: '4,5–5★',
+};
 
 export function ReviewsScreen() {
   const state = useGame((s) => s.state)!;
@@ -163,7 +172,7 @@ export function ReviewsScreen() {
                     key={score}
                     onClick={() => toggleScore(score, scoreFilter, setScoreFilter)}
                     className="flex-1 flex flex-col items-center gap-1 group"
-                    aria-label={`Фильтр: ${score} ${score === 1 ? 'балл' : score < 5 ? 'балла' : 'баллов'} (${count} отзывов)`}
+                    aria-label={`Фильтр: ${score}★ — диапазон ${BUCKET_RANGES[score]} (${count} отзывов)`}
                     aria-pressed={scoreFilter.includes(String(score))}
                   >
                     <span className={cn('text-xs tabular-nums font-semibold', active ? 'text-stone-700' : 'text-stone-300')}>
@@ -185,6 +194,14 @@ export function ReviewsScreen() {
                 );
               })}
             </div>
+            {/* 26-ui: пояснение границ корзин — весь негатив (≤3,5★) виден в 1–3★ */}
+            <p className="text-xs text-stone-500">
+              Негативными считаются оценки ≤3,5★ (столбцы 1–3★). Неотвеченных сейчас:{' '}
+              <span className={cn('tabular-nums', unanswered > 0 ? 'text-red-700 font-semibold' : 'text-stone-600')}>
+                {Math.round(unanswered)}
+              </span>{' '}
+              — «Ответить» выше обнуляет счётчик.
+            </p>
           </div>
 
           {/* Фильтры по баллам */}
@@ -283,7 +300,12 @@ export function ReviewsScreen() {
             text={anyFilter ? 'Под фильтры ничего не попало — ослабьте условия' : 'Отзывов ещё нет — запустите дни симуляции, гости оценят сервис'}
           />
         ) : (
-          <ScrollArea className="max-h-[420px] pr-3">
+          // 26-ui: ограничиваем сам Radix Viewport — иначе лента «вылезает»
+          // из max-h корня без прокрутки (см. аналогичный фикс на Складе).
+          <ScrollArea
+            type="always"
+            className="max-h-[420px] rounded-lg pr-3 [&>[data-slot=scroll-area-viewport]]:max-h-[420px] [&_[data-slot=scroll-area-thumb]]:bg-stone-400"
+          >
             <div className="space-y-2">
               {recent.map((r) => (
                 <ReviewRow key={r.id} review={r} />
@@ -302,14 +324,22 @@ function toggleScore(score: number, current: string[], set: (v: string[]) => voi
   set(current.includes(key) ? current.filter((k) => k !== key) : [...current, key]);
 }
 
-/** Ведро оценки: 4.7 → «5», 3.2 → «3». */
+/**
+ * Ведро оценки для гистограммы/фильтров.
+ * Границы согласованы с порогом ответа ≤3,5★ (REVIEWS_V2.negThreshold):
+ * весь негатив (включая 3,1–3,5★) виден в столбцах 1–3★ — раньше
+ * Math.round(3.5) прячет такие отзывы в столбец 4★.
+ */
 function scoreBucket(r: Review): number {
-  return Math.max(1, Math.min(5, Math.round(r.score)));
+  const s = r.score;
+  return s <= 1.5 ? 1 : s <= 2.5 ? 2 : s <= 3.5 ? 3 : s <= 4.5 ? 4 : 5;
 }
 
 /** Карточка одного отзыва. */
 function ReviewRow({ review }: { review: Review }) {
   const isScandal = review.scandal || review.weight > 1;
+  /** ≤3,5★ — порог «требует ответа» (REVIEWS_V2.negThreshold). */
+  const needsReply = review.score <= REVIEWS_V2.negThreshold;
   const segName = SEGMENTS[review.segmentId as SegmentId]?.name ?? review.segmentId;
   const sourceId = (review.sourceId ?? 'word_of_mouth') as ReviewSourceId;
   const sourceName = REVIEW_SOURCES_MAP[sourceId] ?? 'Сарафан';
@@ -323,6 +353,16 @@ function ReviewRow({ review }: { review: Review }) {
     >
       <div className="flex items-center gap-2 flex-wrap">
         <ScoreBadge score={review.score} />
+        {needsReply && (
+          <Badge
+            variant="secondary"
+            className="bg-red-100 text-red-800 hover:bg-red-100"
+            title="Негативный отзыв (≤3,5★) — попадает в счётчик неотвеченных"
+          >
+            <BellRing className="h-3 w-3 mr-1" aria-hidden />
+            ждёт ответа
+          </Badge>
+        )}
         {isScandal && (
           <Badge variant="secondary" className="bg-red-100 text-red-800 hover:bg-red-100">
             <Flame className="h-3 w-3 mr-1" aria-hidden />
@@ -356,18 +396,18 @@ function ReviewRow({ review }: { review: Review }) {
   );
 }
 
-/** Бейдж оценки 1–5. */
+/** Бейдж оценки 1–5 (дробные — с одним знаком: «3,5/5», не «4/5»). */
 function ScoreBadge({ score }: { score: number }) {
   const cls =
-    score >= 4
+    score > 3.5
       ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-100'
-      : score === 3
+      : score > 2.5
         ? 'bg-amber-100 text-amber-800 hover:bg-amber-100'
         : 'bg-red-100 text-red-800 hover:bg-red-100';
   return (
     <Badge variant="secondary" className={cn('tabular-nums font-semibold', cls)}>
       <Star className="h-3 w-3 mr-0.5" aria-hidden />
-      {score.toFixed(0)}/5
+      {score.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}/5
     </Badge>
   );
 }

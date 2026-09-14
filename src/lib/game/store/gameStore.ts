@@ -31,6 +31,8 @@ import {
   deepCleaning,
   haccpAudit as haccpAuditAction,
   buyAlcoholLicense,
+  buyVerandaPermit,
+  dismantleVeranda as dismantleVerandaEngine,
   repayLoan,
   resolveEvent,
   setAutoPurchase,
@@ -44,6 +46,7 @@ import {
   type ProcurementPolicyId,
 } from '@/lib/game/engine';
 import type { DayRunContext } from '@/lib/game/engine';
+import { VERANDA } from '@/lib/game/config/premises.config';
 
 export type ScreenId =
   | 'restaurant'
@@ -51,6 +54,7 @@ export type ScreenId =
   | 'warehouse'
   | 'staff'
   | 'schedule'
+  | 'advisors'
   | 'finance'
   | 'analytics'
   | 'marketing'
@@ -139,6 +143,10 @@ interface GameStore {
   /** БАЛ-v2 §9 (G-режимы): переключить режим закупки (50 тыс ₽, лаг 2 нед). */
   procurementSet(policy: ProcurementPolicyId): void;
   license(): void;
+  /** Сезонная веранда (26-b): купить разрешение (с апреля, «Лицензии»). */
+  buyVeranda(): void;
+  /** Сезонная веранда (26-b): демонтаж по погоде (с октября). */
+  dismantleVeranda(): void;
   loanRepay(loanIndex: number, amount: number): void;
   resolveCritical(eventId: string, resolutionIndex: number): void;
   // Сохранения.
@@ -162,6 +170,28 @@ function pushToast(get: () => GameStore, message: string, ok: boolean) {
   s.lastToasts = [...s.lastToasts.slice(-4), { message, ok }];
 }
 
+/** ЕДИНАЯ СИСТЕМА «СОБЫТИЯ = ДИЛЕММЫ»: есть ли нерешённое КРИТИЧЕСКОЕ
+ *  событие (блокирует день/неделю — блокирующий диалог). Обычные события
+ *  ход времени не блокируют (ждут решения до дедлайна 2 недели). */
+function hasPendingCritical(state: GameState | null): boolean {
+  return !!state?.activeEvents.some((e) => !e.resolved && e.criticality === 'critical');
+}
+
+/** Тосты об авто-закрытых просроченных событиях — только для недели,
+ *  закрытой ЭТИМ действием (weekResult перезаписывается раз в неделю,
+ *  дублирования нет: после следующего закрытия список будет другим). */
+function timeoutToasts(
+  prev: GameState | null,
+  next: GameState,
+): { message: string; ok: boolean }[] {
+  if (!prev || next.week <= prev.week) return []; // неделя не закрывалась
+  const closed = next.weekResult?.week === next.week - 1 ? next.weekResult?.events ?? [] : [];
+  return closed
+    .filter((e) => (e.resolutionNote ?? '').includes('Срок истёк'))
+    .slice(0, 3)
+    .map((e) => ({ message: `Событие «${e.title}» закрылось само: срок решения истёк`, ok: false }));
+}
+
 export const useGame = create<GameStore>((set, get) => ({
   state: null,
   screen: 'restaurant',
@@ -182,7 +212,9 @@ export const useGame = create<GameStore>((set, get) => ({
   runDay: () => {
     const s = get();
     if (!s.state || s.busy || s.state.phase === 'gameover') return;
-    if (s.state.activeEvents.some((e) => !e.resolved)) return;
+    // Блокирует только нерешённое КРИТИЧЕСКОЕ событие (диалог вверху);
+    // обычные события ждут решения на вкладке «События» до дедлайна.
+    if (hasPendingCritical(s.state)) return;
     if (s.midday) return; // день на паузе — сначала завершите его
     set({ busy: true });
     try {
@@ -198,9 +230,15 @@ export const useGame = create<GameStore>((set, get) => ({
         set({ state: draft });
         persist(AUTOSAVE_KEY, draft);
         const toasts = [...(finished?.warnings ?? []).slice(0, 2).map((w) => ({ message: w, ok: false }))];
-        if (draft.activeEvents.some((e) => !e.resolved)) {
+        if (hasPendingCritical(draft)) {
           toasts.push({ message: '⚠️ Критическое событие! Требуется решение.', ok: false });
+        } else {
+          const pending = draft.activeEvents.filter((e) => !e.resolved).length;
+          if (pending > 0) {
+            toasts.push({ message: `⏳ Событий ждут решения: ${pending} — вкладка «События»`, ok: false });
+          }
         }
+        toasts.push(...timeoutToasts(s.state, draft));
         set({ busy: false, lastToasts: toasts });
         return;
       }
@@ -208,9 +246,15 @@ export const useGame = create<GameStore>((set, get) => ({
       set({ state: newState });
       persist(AUTOSAVE_KEY, newState);
       const toasts = [...newState.lastDayResult?.warnings.slice(0, 2).map((w) => ({ message: w, ok: false })) ?? []];
-      if (newState.activeEvents.some((e) => !e.resolved)) {
+      if (hasPendingCritical(newState)) {
         toasts.push({ message: '⚠️ Критическое событие! Требуется решение.', ok: false });
+      } else {
+        const pending = newState.activeEvents.filter((e) => !e.resolved).length;
+        if (pending > 0) {
+          toasts.push({ message: `⏳ Событий ждут решения: ${pending} — вкладка «События»`, ok: false });
+        }
       }
+      toasts.push(...timeoutToasts(s.state, newState));
       set({ busy: false, lastToasts: toasts });
     } catch (e) {
       set({ busy: false, lastToasts: [{ message: `Ошибка симуляции: ${String(e)}`, ok: false }] });
@@ -243,9 +287,15 @@ export const useGame = create<GameStore>((set, get) => ({
         toasts.push({ message: `День доигран. Экстренных мер: ${result.emergencyActions.length}`, ok: true });
       }
       toasts.push(...(result.warnings.slice(0, 2).map((w) => ({ message: w, ok: false }))));
-      if (newState.activeEvents.some((e) => !e.resolved)) {
+      if (hasPendingCritical(newState)) {
         toasts.push({ message: '⚠️ Критическое событие! Требуется решение.', ok: false });
+      } else {
+        const pending = newState.activeEvents.filter((e) => !e.resolved).length;
+        if (pending > 0) {
+          toasts.push({ message: `⏳ Событий ждут решения: ${pending} — вкладка «События»`, ok: false });
+        }
       }
+      toasts.push(...timeoutToasts(s.state, newState));
       set({ busy: false, lastToasts: toasts });
     } catch (e) {
       set({ busy: false, lastToasts: [{ message: `Ошибка симуляции: ${String(e)}`, ok: false }] });
@@ -275,7 +325,9 @@ export const useGame = create<GameStore>((set, get) => ({
   runWeek: () => {
     const s = get();
     if (!s.state || s.busy || s.state.phase === 'gameover') return;
-    if (s.state.activeEvents.some((e) => !e.resolved)) return;
+    // Блокирует только нерешённое КРИТИЧЕСКОЕ событие; обычные события
+    // ждут решения до дедлайна (авто-закрытие на закрытии недели).
+    if (hasPendingCritical(s.state)) return;
     set({ busy: true });
     try {
       const { state: newState, result } = simulateWeek(s.state, s.state.seed);
@@ -289,6 +341,13 @@ export const useGame = create<GameStore>((set, get) => ({
           message: `Неделя ${result.week} закрыта: прибыль ${(profit / 1000).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} тыс ₽`,
           ok: profit >= 0,
         });
+        // Автозакрытые просрочки: предупреждение на каждое (макс 3).
+        toasts.push(
+          ...result.events
+            .filter((e) => (e.resolutionNote ?? '').includes('Срок истёк'))
+            .slice(0, 3)
+            .map((e) => ({ message: `Событие «${e.title}» закрылось само: срок решения истёк`, ok: false })),
+        );
       }
       if (result?.gameOver) {
         toasts.push({
@@ -301,8 +360,13 @@ export const useGame = create<GameStore>((set, get) => ({
       if (result?.quarterlyReview) {
         toasts.push({ message: `Квартальный разбор: BSC ${result.quarterlyReview.bscAvg} — ${result.quarterlyReview.verdict}`, ok: true });
       }
-      if (newState.activeEvents.some((e) => !e.resolved)) {
+      if (hasPendingCritical(newState)) {
         toasts.push({ message: '⚠️ Неделя прервана критическим событием!', ok: false });
+      } else {
+        const pending = newState.activeEvents.filter((e) => !e.resolved).length;
+        if (pending > 0) {
+          toasts.push({ message: `⏳ Событий ждут решения: ${pending} — вкладка «События»`, ok: false });
+        }
       }
       set({ busy: false, lastToasts: toasts });
     } catch (e) {
@@ -346,6 +410,8 @@ export const useGame = create<GameStore>((set, get) => ({
   replyReviews: () => get().apply((st) => replyToReviews(st)),
   procurementSet: (policy) => get().apply((st) => setProcurementPolicy(st, policy)),
   license: () => get().apply((st) => buyAlcoholLicense(st)),
+  buyVeranda: () => get().apply((st) => buyVerandaPermit(st)),
+  dismantleVeranda: () => get().apply((st) => dismantleVerandaEngine(st)),
   loanRepay: (loanIndex, amount) => get().apply((st) => repayLoan(st, loanIndex, amount)),
   resolveCritical: (eventId, resolutionIndex) =>
     get().apply((st) => resolveEvent(st, eventId, resolutionIndex)),
@@ -457,7 +523,12 @@ export const useGame = create<GameStore>((set, get) => ({
  *  HACCP — санитарная система (миграция = день «аудита», без штрафа),
  *  рутина дилемм и комиссия доставки в перманентных эффектах.
  *  v10: инфляция (§10: индексы закупок/ФОТ/коммуналки с 1.0) и меню-усталость
- *  (§14: возраст блюд с 0 — старые сейвы без штрафа). */
+ *  (§14: возраст блюд с 0 — старые сейвы без штрафа).
+ *  v11: единая система «события = дилеммы» — разрешённые события уходят из
+ *  активных, нерешённым проставляется deadlineWeek (2 недели).
+ *  v12: сезонная веранда (26-b) — веранда из старого визарда считается
+ *  купленной в апреле и дальше живёт по сезонной логике (май–сентябрь,
+ *  демонтаж с октября); инициализация счётчика текучести персонала. */
 function migrateState(state: GameState): void {
   const r = state.restaurant;
   // v4: настройки геймплея.
@@ -517,6 +588,8 @@ function migrateState(state: GameState): void {
   if (state.history.relocations == null) state.history.relocations = 0;
   // v9: история квартальных разборов (экран читает её целиком).
   if (state.history.quarterlyReviews == null) state.history.quarterlyReviews = [];
+  // v11: журнал решённых событий (история на экране «События»).
+  if (state.history.resolvedEvents == null) state.history.resolvedEvents = [];
   // v9: HACCP — старые сейвы без системы не получают штраф запущенности
   // (день «аудита» = день миграции).
   if (r && r.haccp == null) {
@@ -540,6 +613,17 @@ function migrateState(state: GameState): void {
     if (r.staff.callIns) r.staff.callIns = [];
   }
   if (!r) return;
+  // ===== v11: ЕДИНАЯ СИСТЕМА «СОБЫТИЯ = ДИЛЕММЫ» =====
+  // Разрешённые события-визиты убираются из активных (эффект уже применён);
+  // остаются только синтетические носители demand-эффекта (relocation_downturn
+  // и решённые бусты спроса — их читает eventDemandFactor). Нерешённым
+  // событиям проставляется дедлайн (2 недели от даты) для авто-закрытия.
+  state.activeEvents = (state.activeEvents ?? []).filter(
+    (e) => !e.resolved || (e.effect.demandBoost != null && e.effect.demandBoostWeeks != null),
+  );
+  for (const e of state.activeEvents) {
+    if (!e.resolved && e.deadlineWeek == null) e.deadlineWeek = e.date.week + 2;
+  }
   if (!r.marketing.autoPurchase) {
     r.marketing.autoPurchase = { enabled: true, coverDays: 2 };
   }
@@ -564,6 +648,22 @@ function migrateState(state: GameState): void {
   // v3: недостающие метрики недельной статистики.
   for (const w of state.history.weekStats) {
     if (w.returningShare == null) w.returningShare = 0;
+  }
+  // ===== v12: СЕЗОННАЯ ВЕРАНДА (26-b) =====
+  // Легаси-веранда из визарда (verandaActive=true без разрешения) считается
+  // купленной в апреле — старые сейвы продолжают работать по сезонной логике:
+  // веранде включатся только с мая, в октябре придёт событие демонтажа.
+  if (r) {
+    if (r.verandaActive === true && !r.licenses.veranda) {
+      r.licenses.veranda = { boughtWeek: 1, boughtMonth: 4 };
+    }
+    if (r.licenses.veranda && r.verandaSeats === 0) {
+      r.verandaSeats = VERANDA.seats;
+    }
+    // Текучесть (26-b): счётчики стартуют с нуля, история копится с этой недели.
+    if (!r.staff.turnover) {
+      r.staff.turnover = { hiredTotal: 0, quitTotal: 0, firedTotal: 0, snapshots: [] };
+    }
   }
 }
 

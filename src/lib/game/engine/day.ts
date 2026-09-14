@@ -32,6 +32,7 @@ import { DIFFICULTIES } from '../config/difficulty.config';
 import { LOCATIONS_MAP } from '../config/locations.config';
 import { monthOfDay, dayOfYear } from '../config/demandProfiles.config';
 import { STAFF_ROLES, ROLE_IDS } from '../config/staffRoles.config';
+import { VERANDA } from '../config/premises.config';
 import type { RoleId } from '../types';
 import { cloneState, addTransaction, workingHours, dayIndex, clamp } from './core';
 import { hourlyDemand, emptyReturning } from './demand';
@@ -50,7 +51,6 @@ import {
   returningShareForHour,
   updateRisks,
   checkEvents,
-  applyEventEffects,
   updateCleanliness,
   updateComfortAtmosphere,
   updateEquipmentWear,
@@ -175,6 +175,23 @@ export function startDayRun(state: GameState, seed: number): { draft: GameState;
   const delivery = processDeliveries(restaurant, date, run.rngs.supply);
   run.supplyErrors = delivery.supplyErrors;
   restaurant.inventory.supplyErrorsWeek = (restaurant.inventory.supplyErrorsWeek ?? 0) + delivery.supplyErrors;
+
+  // ===== СЕЗОННАЯ ВЕРАНДА (26-b): активация по календарю =====
+  // Разрешение куплено в boughtMonth → веранда работает со СЛЕДУЮЩЕГО
+  // месяца по сентябрь: куплено в апреле → с мая; в мае → с июня;
+  // в сентябре → уже не окупится (окно buying+1..9 пустое). Демонтаж/порча
+  // выключают веранду навсегда. Часовой цикл (totalSeats) и комфорт
+  // (endday.updateComfortAtmosphere) уже завязаны на verandaActive.
+  {
+    const permit = restaurant.licenses.veranda;
+    const month = monthOfDay(dayOfYear(draft.week, draft.day));
+    restaurant.verandaActive =
+      !!permit &&
+      !permit.removed &&
+      !permit.spoiled &&
+      month >= permit.boughtMonth + 1 &&
+      month <= VERANDA.seasonLastMonth;
+  }
 
   // КАМПАНИИ: завершение по сроку (ТЗ §21.6). Раньше кампания жила вечно —
   // «осталось 0 недель», но бейдж «Активна» и списание бюджета продолжались.
@@ -392,19 +409,28 @@ export function finishDay(
     date,
   });
 
-  // События (ТЗ §20): некритические применяются сразу, критические — на паузу.
+  // События (ТЗ §20). ЕДИНАЯ СИСТЕМА «СОБЫТИЯ = ДИЛЕММЫ» (запрос
+  // пользователя): ЛЮБОЕ событие — развилка, требующая решения игрока.
+  // ВСЕ события (обычные/позитивные тоже) уходят в activeEvents
+  // НЕразрешёнными; эффекты применяются ТОЛЬКО в момент решения:
+  //  - игроком — на экране «События» (setup.applyEventResolution);
+  //  - автоматически — по истечении дедлайна (2 недели) на закрытии недели
+  //    (setup.autoResolveOverdueEvents, взвешенный выбор 3:1 в пользу
+  //    негативного исхода).
+  // Критические по-прежнему ставят блокирующий диалог (GameShell) — без
+  // их решения время не идёт; обычные ход времени не блокируют.
   const events: GameEvent[] = checkEvents(draft, restaurant, date, rngs.events);
-  const pendingCritical: GameEvent[] = [];
   for (const event of events) {
-    if (event.criticality === 'critical') {
-      event.resolved = false;
-      pendingCritical.push(event);
-    } else {
-      applyEventEffects(draft, restaurant, event);
-    }
+    event.resolved = false;
+    event.deadlineWeek = event.date.week + 2;
   }
 
   // ===== 5. KPI ДНЯ =====
+  // 26-b: средневзвешенное ожидание севших гостей (вес — число севших
+  // в часе): Σ(waitMinutes × seated) / Σ seated. Видимость работы хостес.
+  const waitWeighted = hourLogs.reduce((s, h) => s + (h.waitMinutes ?? 0) * h.seated, 0);
+  const seatedSum = hourLogs.reduce((s, h) => s + h.seated, 0);
+  const avgWaitMinutes = seatedSum > 0 ? Math.round((waitWeighted / seatedSum) * 10) / 10 : 0;
   const dishesTop = Object.entries(totals.dishesSold)
     .map(([dishId, count]) => ({ dishId, count }))
     .sort((a, b) => b.count - a.count)
@@ -425,6 +451,7 @@ export function finishDay(
     dishesTop,
     stopListHits: totals.stopListHits,
     returningGuests: Math.round(totals.returningGuests),
+    avgWaitMinutes: seatedSum > 0 ? avgWaitMinutes : undefined,
     categoryRevenue: Object.fromEntries(
       Object.entries(totals.categoryRevenue).map(([k, v]) => [k, Math.round(v ?? 0)]),
     ),
@@ -446,6 +473,27 @@ export function finishDay(
   }
   if (totals.lost > guests * 0.08 && totals.lost > 5) {
     warnings.push('Гости уходят из очереди — узкое место в посадке (хостес/места/оборачиваемость).');
+  }
+  // 26-b (запрос пользователя): хостес не справляется → время ожидания
+  // в очереди растёт. Условие отдельно от «уходов из очереди»: гости ещё
+  // терпят и садятся, но ждать уже больно (пик часа > 18 мин).
+  const HOSTESS_WAIT_ALERT_MIN = 18;
+  const peakWait = hourLogs.reduce((m, h) => Math.max(m, h.waitMinutes ?? 0), 0);
+  if (peakWait > HOSTESS_WAIT_ALERT_MIN) {
+    warnings.push(
+      `Хостес не справляется: гости ждали до ${Math.round(peakWait)} мин — посадка узкое место ` +
+        '(вторая хостес в вечер или стоп-лист сложных блюд).',
+    );
+  }
+  // 26-b (запрос пользователя): мало официантов → сервис хуже (штраф
+  // ServiceQuality в hour.ts) → негативные отзывы и усталость смены.
+  // Среднее по топ-3 часам (как в buildRoleLoads — пик без выбросов).
+  const topWaiterLoad = peakOf(hourLogs.map((h) => h.waiterLoad));
+  if (topWaiterLoad > 1.2) {
+    warnings.push(
+      `Официантов мало: ${Math.round(topWaiterLoad * (STAFF_ROLES.waiter.guestsPerHour ?? 12))} гостей на официанта в пик — ` +
+        'сервис и чаевые падают, растут негативные отзывы и усталость смены.',
+    );
   }
   if (averageFatigue(restaurant.staff) > 60) {
     warnings.push('Персонал выгорает: растут ошибки и риск увольнений.');
@@ -476,11 +524,12 @@ export function finishDay(
   });
   while (draft.history.dayLogs.length > 7) draft.history.dayLogs.shift();
 
-  if (pendingCritical.length > 0) {
-    draft.activeEvents.push(...pendingCritical);
+  if (events.length > 0) {
+    draft.activeEvents.push(...events);
     // Время всё равно идёт: день прожит, деньги двигались. Раньше критическое
     // событие «замораживало» счётчик дня — повторная симуляция того же дня
-    // задваивала выручку. Диалог решения остаётся на паузе до выбора игрока.
+    // задваивала выручку. Диалог критического решения остаётся на паузе до
+    // выбора игрока (см. GameShell); обычные события просто ждут дедлайна.
   }
   if (draft.day >= 6) {
     // Граница недели: закрытие финансов (зарплата/аренда/налоги/кредиты, BSC,

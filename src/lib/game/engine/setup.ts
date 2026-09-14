@@ -43,15 +43,20 @@ import { LANDLORD } from '../config/landlord.config';
 import { EQUIPMENT_SERVICE } from '../config/equipmentService.config';
 import { HACCP } from '../config/haccp.config';
 import { deriveRng, hashSeed } from '../rng';
+import { monthOfDay, dayOfYear, MONTHS_RU, MONTHS_RU_GEN, MONTHS_RU_PREP } from '../config/demandProfiles.config';
+import { noteHired, noteFired } from './staff';
 import { initLandlordState, applyLandlordResolution } from './landlord';
 import { applyDividendDecision, applyOwnerForcePay, applyOwnerRefuse } from './dividends';
 import { applyDilemmaResolution } from './dilemmas';
+import { quitStaffRole } from './endday';
 import { hireCostMult } from './permanent';
 import { noteDishAdded, noteDishRemoved } from './menufatigue';
 
 export interface SetupOptions {
   seed: number;
   restaurantName: string;
+  /** Ник игрока (Task 28): 2–24 символа, обязателен в визарде; идёт в рейтинг. */
+  nick?: string;
   locationId: string;
   /** Сложность (ТЗ §36): novice | standard | professional. По умолчанию standard. */
   difficultyId?: string;
@@ -59,7 +64,10 @@ export interface SetupOptions {
   renovation: RenovationLevel;
   loanAmount: number;
   equipment: { kitchen: EquipmentLevel; coffee: EquipmentLevel; hall: EquipmentLevel };
-  veranda: boolean;
+  /** @deprecated (26-b): веранда больше не покупается в визарде — она стала
+   *  сезонной лицензией на вкладке «Лицензии» (buyVerandaPermit, апрель+).
+   *  Поле оставлено опциональным: его передают старые скрипты scripts/*.ts. */
+  veranda?: boolean;
   alcoholLicense: boolean;
   menuIds?: string[];
   initialCoverDays?: number;
@@ -133,7 +141,6 @@ export function createGame(opts: SetupOptions): GameState {
   const rentMonthly = Math.round(prem.areaM2 * loc.rentPerM2);
   const deposit = rentMonthly * loc.depositMonths;
   const utilitiesMonthly = Math.round(prem.areaM2 * loc.utilitiesPerM2);
-  const verandaCost = opts.veranda ? VERANDA.setupCost : 0;
   const licenseCost = opts.alcoholLicense ? ALCOHOL_LICENSE.annualCost : 0;
 
   const loanAmount = clamp(opts.loanAmount, 0, Math.min(LOANS.maxTotalDebt, diff.loanLimitMultiplier * diff.ownerEquity));
@@ -163,8 +170,10 @@ export function createGame(opts: SetupOptions): GameState {
     premisesSize: opts.premisesSize,
     areaM2: prem.areaM2,
     seats: prem.seats,
+    // 26-b: веранда — СЕЗОННАЯ лицензия (покупается на «Лицензиях» с апреля),
+    // на старте её нет никогда (opts.veranda из визарда больше не работает).
     verandaActive: false,
-    verandaSeats: opts.veranda ? VERANDA.seats : 0,
+    verandaSeats: 0,
     renovation: opts.renovation,
     rentMonthly,
     depositPaid: deposit,
@@ -243,6 +252,9 @@ export function createGame(opts: SetupOptions): GameState {
     phase: 'managing',
     status: 'open',
     difficultyId: diff.id,
+    // Task 28: ник для рейтинга (старые сейвы/скрипты без ника → undefined,
+    // финальный экран предложит ввести ник перед отправкой результата).
+    playerNick: opts.nick?.trim() || undefined,
     options: { middayPause: true, builtinIllustrations: false, mainView: 'report' },
     restaurant,
     history: {
@@ -266,10 +278,6 @@ export function createGame(opts: SetupOptions): GameState {
   addTransaction(restaurant, date, 'renovation', renovationCost, 'out', `Ремонт: ${RENOVATION_LEVELS[opts.renovation].label}`);
   addTransaction(restaurant, date, 'equipment', equipCost, 'out', 'Оборудование (кухня, кофе, зал)');
   addTransaction(restaurant, date, 'deposit', deposit, 'out', `Депозит по аренде (${loc.depositMonths} мес)`);
-  if (verandaCost > 0) {
-    addTransaction(restaurant, date, 'equipment', verandaCost, 'out', 'Летняя веранда: установка');
-    restaurant.verandaActive = true;
-  }
   if (licenseCost > 0) {
     addTransaction(restaurant, date, 'license', licenseCost, 'out', 'Лицензия на алкоголь (год)');
   }
@@ -446,6 +454,8 @@ export function hireStaff(state: GameState, roleId: RoleId, count: number): Acti
   }
   pool.count += count;
   pool.newHires += count;
+  // ТЕКУЧЕСТЬ (26-b): найм в счётчик (KPI «Персонал»).
+  noteHired(r, count);
   return {
     ok: true,
     message: `Нанято: ${STAFF_ROLES[roleId].name} ×${count} (адаптация 7 дней)${cost > 0 ? ` — подбор ${cost.toLocaleString('ru-RU')} ₽` : ''}`,
@@ -457,6 +467,8 @@ export function fireStaff(state: GameState, roleId: RoleId, count: number): Acti
   const pool = r.staff.pools[roleId];
   if (pool.count - count < 0) return { ok: false, message: 'Недостаточно сотрудников' };
   pool.count -= count;
+  // ТЕКУЧЕСТЬ (26-b): увольнение игроком в счётчик (KPI «Персонал»).
+  noteFired(r, count);
   return { ok: true, message: `Уволено: ${STAFF_ROLES[roleId].name} ×${count}` };
 }
 
@@ -603,6 +615,83 @@ export function buyAlcoholLicense(state: GameState): ActionResult {
   return { ok: true, message: 'Лицензия получена: алкоголь доступен' };
 }
 
+/* ====================== СЕЗОННАЯ ЛЕТНЯЯ ВЕРАНДА (26-b) ====================== */
+
+/** Рабочих месяцев сезона осталось при покупке в boughtMonth
+ *  (апрель → 5 … август → 1, сентябрь+ → 0: сезон пропущен). */
+export function verandaSeasonMonths(boughtMonth: number): number {
+  return Math.max(0, VERANDA.seasonLastMonth - boughtMonth);
+}
+
+/** Покупка разрешения и установка веранды (вкладка «Лицензии»).
+ *  Разрешение продаётся с АПРЕЛЯ; веранда работает со СЛЕДУЮЩЕГО месяца
+ *  после покупки по СЕНТЯБРЬ (куплено в апреле → 5 рабочих месяцев).
+ *  Фиксированная цена + сокращающийся сезон = ранние зарабатывают,
+ *  опоздавшие не окупаются (сентябрь покупаем, но предупреждаем — игрок
+ *  имеет право на ошибку). */
+export function buyVerandaPermit(state: GameState): ActionResult {
+  const r = state.restaurant!;
+  const month = monthOfDay(dayOfYear(state.week, state.day));
+  if (r.licenses.veranda) return { ok: false, message: 'Разрешение на веранду уже получено' };
+  if (month < VERANDA.permitFromMonth) {
+    return { ok: false, message: `Разрешение продаётся с апреля (сейчас ${MONTHS_RU[month - 1]})` };
+  }
+  if (r.finance.cash < VERANDA.setupCost) {
+    return { ok: false, message: `Недостаточно денег: нужно ${VERANDA.setupCost.toLocaleString('ru-RU')} ₽` };
+  }
+  addTransaction(r, dateNow(state), 'license', VERANDA.setupCost, 'out', 'Летняя веранда: разрешение и установка');
+  r.licenses.veranda = { boughtWeek: state.week, boughtMonth: month };
+  r.verandaSeats = VERANDA.seats;
+  const openMonth = Math.min(12, month + 1);
+  const workMonths = verandaSeasonMonths(month);
+  if (workMonths <= 0) {
+    // Куплено в сентябре (или позже): веранду уже не окупить — но не запрещаем.
+    return {
+      ok: true,
+      message: `Разрешение получено, но веранда откроется только в ${MONTHS_RU_PREP[openMonth - 1]} — сезон уже пропущен, деньги потрачены зря`,
+    };
+  }
+  const monthsWord = workMonths === 1 ? 'рабочий месяц' : workMonths >= 5 ? 'рабочих месяцев' : 'рабочих месяца';
+  return {
+    ok: true,
+    message: `Разрешение получено: веранда заработает с ${MONTHS_RU_GEN[openMonth - 1]} (${workMonths} ${monthsWord} сезона)`,
+  };
+}
+
+/** Демонтаж веранды «по погоде» с вкладки «Лицензии» (с октября).
+ *  Если висит нерешённое событие veranda_teardown — закрываем его
+ *  заранее (игрок сделал то же самое своими руками). */
+export function dismantleVeranda(state: GameState): ActionResult {
+  const r = state.restaurant!;
+  const permit = r.licenses.veranda;
+  if (!permit) return { ok: false, message: 'Веранда не установлена' };
+  if (permit.removed) return { ok: false, message: 'Веранда уже демонтирована' };
+  if (permit.spoiled) return { ok: false, message: 'Поздно: мебель и оборудование уже испорчены' };
+  const month = monthOfDay(dayOfYear(state.week, state.day));
+  if (month < VERANDA.seasonLastMonth + 1) {
+    return { ok: false, message: 'Демонтаж по погоде возможен с октября' };
+  }
+  if (r.finance.cash < VERANDA.removalCost) {
+    return { ok: false, message: `Недостаточно денег на демонтаж (${VERANDA.removalCost.toLocaleString('ru-RU')} ₽)` };
+  }
+  addTransaction(r, dateNow(state), 'other', VERANDA.removalCost, 'out', 'Демонтаж веранды');
+  permit.removed = true;
+  permit.removedWeek = state.week;
+  r.verandaActive = false;
+  // Критическое событие veranda_teardown (если висит) закрывается руками игрока.
+  const pending = state.activeEvents.find((e) => e.templateId === 'veranda_teardown' && !e.resolved);
+  if (pending) {
+    pending.resolved = true;
+    pending.resolutionNote = 'Демонтировано заранее с экрана Лицензии';
+    state.activeEvents = state.activeEvents.filter((e) => e.id !== pending.id);
+    journalResolved(state, pending);
+  }
+  return {
+    ok: true,
+    message: `Веранда демонтирована за ${VERANDA.removalCost.toLocaleString('ru-RU')} ₽ — мебель и оборудование сохранены до следующего сезона`,
+  };
+}
+
 export function repayLoan(state: GameState, loanIndex: number, amount: number): ActionResult {
   const r = state.restaurant!;
   const loan = r.finance.loans[loanIndex];
@@ -619,97 +708,165 @@ export function repayLoan(state: GameState, loanIndex: number, amount: number): 
   return { ok: true, message: 'Досрочное погашение принято' };
 }
 
-/** Решение критического события (ТЗ §20.4): выбор варианта реакции.
- *  ДИНАМИЧЕСКИЕ РЕЗОЛЮЦИИ (v8): системные события (дилеммы §15, дивиденды
- *  §13, арендодатель §6, уход шефа §15) несут собственные варианты —
- *  они приоритетнее шаблона; спец-теги (dilemma/dividend/landlord/…)
- *  включают собственную логику применения (модули landlord/dividends/dilemmas). */
+/** Решение события (ТЗ §20.4, ЕДИНАЯ СИСТЕМА «СОБЫТИЯ = ДИЛЕММЫ»):
+ *  тонкая обёртка — находит нерешённое событие в activeEvents и делегирует
+ *  ядру применения applyEventResolution. ДИНАМИЧЕСКИЕ РЕЗОЛЮЦИИ (v8):
+ *  системные события (дилеммы §15, дивиденды §13, арендодатель §6, уход
+ *  шефа) несут собственные варианты — они приоритетнее шаблона; спец-теги
+ *  (dilemma/dividend/landlord/…) включают собственную логику применения. */
 export function resolveEvent(state: GameState, eventId: string, resolutionIndex: number): ActionResult {
   const event = state.activeEvents.find((e) => e.id === eventId);
   if (!event) return { ok: false, message: 'Событие не найдено' };
+  if (event.resolved) return { ok: false, message: 'Событие уже решено' };
+  return applyEventResolution(state, event, resolutionIndex, { auto: false });
+}
+
+/** ЯДРО применения резолюции события (вызывается решением игрока и
+ *  авто-закрытием просрочки — autoResolveOverdueEvents).
+ *
+ *  opts.auto: ветка выбрана системой по истечении дедлайна. Отличия:
+ *   - НЕ отказываем из-за нехватки кассы: платим min(cost, cash)
+ *     (касса не уходит в минус), в заметку события добавляется
+ *     «(денег хватило не на всё)»;
+ *   - ветки без спец-логики применяются как обычно (generic-ветка
+ *     расширена staffQuit/equipmentBoost/demand-носителем).
+ *  Деньги — только через addTransaction (инвариант движка). */
+export function applyEventResolution(
+  state: GameState,
+  event: GameEvent,
+  resolutionIndex: number,
+  opts: { auto?: boolean } = {},
+): ActionResult {
+  const auto = opts.auto === true;
   const dynamicRes = event.resolutions;
   const template = EVENT_TEMPLATES_MAP[event.templateId];
-  if (!dynamicRes && !template?.resolutions) return { ok: false, message: 'Нет вариантов решения' };
-  const res = (dynamicRes ?? template!.resolutions!)[resolutionIndex];
+  const options = dynamicRes ?? template?.resolutions;
+  const res = options?.[resolutionIndex];
   if (!res) return { ok: false, message: 'Неверный вариант' };
   const r = state.restaurant!;
+
+  // Оплата платной ветки. Ручное решение: кассы не хватает — отказ.
+  // Авто-решение (просрочка): платим что есть, помечаем shortPay.
+  let shortPay = false;
+  const payBranchCost = (label: string): boolean => {
+    if (res.cost > 0) {
+      if (auto) {
+        const pay = Math.min(res.cost, Math.max(0, r.finance.cash));
+        if (pay < res.cost) shortPay = true;
+        if (pay > 0) addTransaction(r, event.date, 'other', pay, 'out', label);
+      } else {
+        if (r.finance.cash < res.cost) return false;
+        addTransaction(r, event.date, 'other', res.cost, 'out', label);
+      }
+    }
+    return true;
+  };
+  /** Финализация: пометить решённым, записать заметку, убрать из активных
+   *  и сохранить в журнал решённых (история на экране «События»). */
+  const closeEvent = (note: string, message?: string): ActionResult => {
+    event.resolved = true;
+    event.resolutionNote = shortPay ? `${note} (денег хватило не на всё)` : note;
+    state.activeEvents = state.activeEvents.filter((e) => e.id !== event.id);
+    journalResolved(state, event);
+    return { ok: true, message: message ?? event.resolutionNote };
+  };
 
   // ===== СПЕЦ-ВЕТКИ СИСТЕМНЫХ СОБЫТИЙ (полная логика до generic-обработки) =====
 
   // Дивиденды (§13): платёж идёт типом 'dividend' и может быть ограничен кассой.
-  const dividendAction = (res as { dividend?: { fraction: number } }).dividend;
+  const dividendAction = res.dividend;
   if (dividendAction) {
-    if (res.cost > 0 && r.finance.cash < Math.min(res.cost, 100_000)) {
+    if (!auto && res.cost > 0 && r.finance.cash < Math.min(res.cost, 100_000)) {
       return { ok: false, message: 'Недостаточно денег на этот вариант' };
     }
     const out = applyDividendDecision(state, event, dividendAction.fraction);
     if (!out.ok) return out;
-    event.resolved = true;
-    state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
-    return { ok: true, message: out.message };
+    return closeEvent(out.message);
   }
   // «Разговор с владельцем»: принудительная выплата доли кассы.
-  const forcePayAction = (res as { ownerForcePay?: { cashShare: number } }).ownerForcePay;
+  const forcePayAction = res.ownerForcePay;
   if (forcePayAction) {
     const out = applyOwnerForcePay(state, event, forcePayAction.cashShare);
     if (!out.ok) return out;
-    event.resolved = true;
-    state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
-    return { ok: true, message: out.message };
+    return closeEvent(out.message);
   }
   // «Разговор с владельцем»: отказ.
-  const ownerRefuseAction = (res as { ownerRefuse?: { trust: number; risk: number } }).ownerRefuse;
+  const ownerRefuseAction = res.ownerRefuse;
   if (ownerRefuseAction) {
     const out = applyOwnerRefuse(state, event, ownerRefuseAction.trust, ownerRefuseAction.risk);
     if (!out.ok) return out;
-    event.resolved = true;
-    state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
-    return { ok: true, message: out.message };
+    return closeEvent(out.message);
   }
   // Арендодатель (§6): шаги индексации/отказ/ультиматум/переезд.
-  const landlordAction = (res as { landlord?: 'accept' | 'refuse' | 'accept_ultimatum' | 'relocate' }).landlord;
+  const landlordAction = res.landlord;
   if (landlordAction) {
     const note = applyLandlordResolution(state, landlordAction, event.date.week);
-    event.resolved = true;
-    event.resolutionNote = note;
-    state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
-    return { ok: true, message: note };
+    return closeEvent(note);
+  }
+  // СЕЗОННАЯ ВЕРАНДА (26-b): демонтаж вовремя / оставить до весны.
+  // Спец-тег включает логику порчи мебели и юр. риска «без разрешения».
+  const verandaAction = res.veranda;
+  if (verandaAction) {
+    const permit = r.licenses.veranda;
+    if (!permit) return closeEvent('Веранда уже не числится за рестораном');
+    if (verandaAction === 'dismantle') {
+      if (permit.removed) return closeEvent('Веранда уже демонтирована — повторно платить не нужно');
+      if (!payBranchCost('Демонтаж веранды')) {
+        return { ok: false, message: 'Недостаточно денег на демонтаж' };
+      }
+      permit.removed = true;
+      permit.removedWeek = state.week;
+      r.verandaActive = false;
+      return closeEvent('Веранда убрана вовремя: мебель и оборудование сохранены до следующего сезона');
+    }
+    // 'leave': веранда остаётся под дождём и заморозками.
+    if (permit.spoiled) return closeEvent('Мебель и оборудование веранды уже испорчены');
+    permit.spoiled = true;
+    r.verandaActive = false;
+    addTransaction(
+      r,
+      event.date,
+      'fine',
+      VERANDA.spoilageCost,
+      'out',
+      'Порча мебели и оборудования веранды (дожди и заморозки)',
+    );
+    r.risks.legal = clamp(r.risks.legal + VERANDA.lateLegalRisk, 0, 100);
+    return closeEvent(
+      `Веранда стояла под дождём и заморозками: мебель и оборудование испорчены ` +
+        `(−${Math.round(VERANDA.spoilageCost / 1000)} тыс ₽), юридический риск +${VERANDA.lateLegalRisk} (работа без разрешения)`,
+    );
   }
   // Дилемма (§15): перманентные эффекты применяет dilemmas.ts.
   // Платные ветки (взятка) проводят деньги честным типом 'other'.
-  const dilemmaTag = (res as { dilemma?: string }).dilemma;
+  const dilemmaTag = res.dilemma;
   if (dilemmaTag) {
-    if (res.cost > 0) {
-      if (r.finance.cash < res.cost) return { ok: false, message: 'Недостаточно денег на этот вариант' };
-      addTransaction(r, event.date, 'other', res.cost, 'out', `Решение дилеммы: ${event.title}`);
+    if (!payBranchCost(`Решение дилеммы: ${event.title}`)) {
+      return { ok: false, message: 'Недостаточно денег на этот вариант' };
     }
     const note = applyDilemmaResolution(state, event, dilemmaTag);
-    event.resolved = true;
-    event.resolutionNote = note;
-    state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
-    return { ok: true, message: note };
+    return closeEvent(note);
   }
   // Платный найм замены (уход шефа §15): подбор + найм роли.
-  const hireAction = (res as { hire?: { roleId: RoleId } }).hire;
+  const hireAction = res.hire;
   if (hireAction) {
-    if (res.cost > 0) {
-      if (r.finance.cash < res.cost) return { ok: false, message: 'Недостаточно денег на подбор' };
-      addTransaction(r, event.date, 'other', res.cost, 'out', `Хедхантинг: ${STAFF_ROLES[hireAction.roleId].name}`);
+    if (!payBranchCost(`Хедхантинг: ${STAFF_ROLES[hireAction.roleId].name}`)) {
+      return { ok: false, message: 'Недостаточно денег на подбор' };
     }
     const pool = r.staff.pools[hireAction.roleId];
     pool.count += 1;
     pool.newHires += 1;
-    const note = res.note;
-    event.resolved = true;
-    event.resolutionNote = note;
-    state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
-    return { ok: true, message: `Новый ${STAFF_ROLES[hireAction.roleId].name} выходит со следующего дня` };
+    // ТЕКУЧЕСТЬ (26-b): найм через событие — в счётчик.
+    noteHired(r, 1);
+    return closeEvent(
+      res.note,
+      `Новый ${STAFF_ROLES[hireAction.roleId].name} выходит со следующего дня`,
+    );
   }
 
   // ===== GENERIC-ВЕТКА (шаблонные события пула) =====
-  if (res.cost > 0) {
-    if (r.finance.cash < res.cost) return { ok: false, message: 'Недостаточно денег на этот вариант' };
-    addTransaction(r, event.date, 'other', res.cost, 'out', `Решение события: ${event.title}`);
+  if (!payBranchCost(`Решение события: ${event.title}`)) {
+    return { ok: false, message: 'Недостаточно денег на этот вариант' };
   }
   const delta = res.effectDelta ?? {};
   if (delta.cash && delta.cash !== 0) {
@@ -722,14 +879,126 @@ export function resolveEvent(state: GameState, eventId: string, resolutionIndex:
       r.risks[key] = clamp(r.risks[key] + (v ?? 0), 0, 100);
     }
   }
-  if (delta.demandBoost) {
-    event.effect.demandBoost = delta.demandBoost;
-    event.effect.demandBoostWeeks = delta.demandBoostWeeks ?? 1;
+  if (delta.staffQuit) {
+    // Тот же детерминированный поток 'staff-quit', что и в прежнем
+    // applyEventEffects (роль от seed × дня события) — хелпер в endday.ts.
+    quitStaffRole(state, r, event, delta.staffQuit);
   }
-  event.resolved = true;
-  event.resolutionNote = res.note;
-  state.activeEvents = state.activeEvents.filter((e) => e.id !== eventId);
-  return { ok: true, message: res.note };
+  if (delta.equipmentBreak) {
+    r.equipment.coffee.wear = clamp(r.equipment.coffee.wear + 25, 0, 100);
+  }
+  if (delta.demandBoost) {
+    // Временный множитель спроса живёт в activeEvents (механизм
+    // eventDemandFactor, как у relocation_downturn). Окно начинается с
+    // недели РЕШЕНИЯ: выбрали «работать без кофе» — неделя без кофе идёт
+    // от решения, а не от происшествия.
+    state.activeEvents.push({
+      id: `${event.id}-demand`,
+      date: { week: state.week, day: state.day, hour: 22 },
+      templateId: event.templateId,
+      title: event.title,
+      description: 'Последствия решения действуют на спрос ограниченное время.',
+      criticality: 'normal',
+      effect: {
+        demandBoost: delta.demandBoost,
+        demandBoostWeeks: delta.demandBoostWeeks ?? 1,
+      },
+      resolved: true,
+    });
+  }
+  return closeEvent(res.note);
+}
+
+/** Журнал решённых событий (v11): история на экране «События» — переживает
+ *  обрезку dayLogs (7 дней) и затирание weekResult. Повторный вызов с тем же
+ *  id (авто-суффикс «Срок истёк» после применения) обновляет запись. */
+function journalResolved(state: GameState, event: GameEvent): void {
+  const journal = (state.history.resolvedEvents ??= []);
+  const snapshot = structuredClone(event);
+  const existing = journal.findIndex((e) => e.id === event.id);
+  if (existing >= 0) journal[existing] = snapshot;
+  else journal.push(snapshot);
+  if (journal.length > 30) state.history.resolvedEvents = journal.slice(-30);
+}
+
+/** АВТО-ЗАКРЫТИЕ ПРОСРОЧЕННЫХ СОБЫТИЙ (ЕДИНАЯ СИСТЕМА «СОБЫТИЯ = ДИЛЕММЫ",
+ *  запрос пользователя): если решение не принято за 2 недели (deadlineWeek
+ *  ?? date.week + 2), вариант выбирается случайно с коэффициентом 3:1 в
+ *  пользу негативного исхода (tone = 'negative' → вес 3, прочие → 1).
+ *
+ *  ДЕТЕРМИНИЗМ (§21): ОДИН rng-поток 'event-timeout' на неделю —
+ *  deriveRng(hashSeed(seed, week)); все события недели тянут из него по
+ *  очереди в СТАБИЛЬНОМ порядке массива activeEvents. Math.random запрещён.
+ *
+ *  Вызывается из closeWeek (weekclose.ts) ДО формирования результата
+ *  недели; возвращает автозакрытые события (для истории недели и тостов). */
+export function autoResolveOverdueEvents(state: GameState, week: number): GameEvent[] {
+  const rng = deriveRng(hashSeed(state.seed, week), 'event-timeout');
+  const closed: GameEvent[] = [];
+  for (let i = 0; i < state.activeEvents.length; ) {
+    const event = state.activeEvents[i];
+    if (event.resolved) {
+      i++; // синтетические носители demand-эффекта не трогаем
+      continue;
+    }
+    const deadline = event.deadlineWeek ?? event.date.week + 2;
+    if (deadline > week) {
+      i++;
+      continue;
+    }
+    const options = event.resolutions ?? EVENT_TEMPLATES_MAP[event.templateId]?.resolutions;
+    if (!options || options.length === 0) {
+      // Вариантов нет — событие закрывается без последствий.
+      event.resolved = true;
+      event.resolutionNote = 'Срок истёк: последствий можно было избежать, но время вышло';
+      journalResolved(state, event);
+      closed.push(event);
+      dropFromActive(state, event);
+      continue;
+    }
+    // Взвешенный выбор ОДНИМ броском rng.next(): negative = 3, прочие = 1.
+    const weights = options.map((o) => (o.tone === 'negative' ? 3 : 1));
+    const total = weights.reduce((s, w) => s + w, 0);
+    let roll = rng.next() * total;
+    let idx = options.length - 1;
+    for (let k = 0; k < options.length; k++) {
+      roll -= weights[k];
+      if (roll < 0) {
+        idx = k;
+        break;
+      }
+    }
+    const out = applyEventResolution(state, event, idx, { auto: true });
+    if (!out.ok) {
+      // Ветка не применилась (экзотика: спец-ветка без состояния) —
+      // закрываем событие без последствий, чтобы оно не висело вечно.
+      event.resolved = true;
+      event.resolutionNote = 'Срок истёк: последствий можно было избежать, но время вышло';
+      journalResolved(state, event);
+    } else {
+      event.resolutionNote =
+        `${event.resolutionNote ?? options[idx].note} — Срок истёк: решение принято без вас, ` +
+        'случайно (3:1 в пользу негативного исхода)';
+      // Обновляем запись журнала: суффикс «Срок истёк» дописан ПОСЛЕ
+      // применения ветки (closeEvent уже сохранил заметку без него).
+      journalResolved(state, event);
+    }
+    closed.push(event);
+    dropFromActive(state, event);
+  }
+  return closed;
+}
+
+/** Убрать событие из activeEvents по САМОМУ ОБЪЕКТУ (не по индексу).
+ *  ФИКС БАГА (найден смоуком 26-b): closeEvent внутри applyEventResolution
+ *  делает `state.activeEvents = state.activeEvents.filter(...)` — массив
+ *  ЗАМЕНЯЕТСЯ новым, и последующий splice(i, 1) по старому индексу удалял
+ *  НЕВИНОВНОГО СОСЕДА (событие бесследно исчезало без решения и эффекта —
+ *  событие демонтажа веранды могло «потеряться», не дождавшись авто-решения).
+ *  Поиск по объекту корректен при любой замене массива. */
+function dropFromActive(state: GameState, event: GameEvent): void {
+  const pos = state.activeEvents.indexOf(event);
+  if (pos >= 0) state.activeEvents.splice(pos, 1);
 }
 
 /** Переключение автозаказа «завхоза» (ежедневная дозакупка на старте дня). */

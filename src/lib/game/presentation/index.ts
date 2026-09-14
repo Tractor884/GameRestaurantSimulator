@@ -76,3 +76,17 @@ export {
   getRestaurantVisualState,
   getGuestMoodOfDay,
 } from './scene';
+export {
+  marketerBrief,
+  bankerBrief,
+  ownerBrief,
+  coreSegmentOf,
+  dividendsPaidTotal,
+} from './advisors';
+export type {
+  MarketerBrief,
+  BankerBrief,
+  OwnerBrief,
+  OwnerGoal,
+  AdvisorCampaign,
+} from './advisors';

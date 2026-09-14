@@ -7,11 +7,21 @@
 import { useMemo, useRef, useState } from 'react';
 import { useGame, type SaveMeta } from '@/lib/game/store/gameStore';
 import { SectionCard, money, moneyShort } from '../widgets';
+import { LeaderboardTable } from '../LeaderboardTable';
+import { computeFinalGrade } from '@/lib/game/engine';
 import { difficultyWin as winOf, difficultyOf as diffOf } from '@/lib/game/config/difficulty.config';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,6 +44,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   Siren,
+  Trophy,
 } from 'lucide-react';
 
 export function SettingsScreen() {
@@ -51,8 +62,20 @@ export function SettingsScreen() {
   const [refresh, setRefresh] = useState(0);
   const [importError, setImportError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Task 28: диалог рейтинга игроков (сравниться с друзьями до конца года).
+  const [ratingOpen, setRatingOpen] = useState(false);
 
   const saves: (SaveMeta | null)[] = useMemo(() => listSaves(), [listSaves, refresh]);
+
+  // Task 28: подсветка своей строки в рейтинге — если партия уже финишировала
+  // (финальный экран считает ранг/очки тем же computeFinalGrade).
+  const meOfCurrentGame = useMemo(() => {
+    if (state.phase !== 'gameover') return null;
+    const nick = state.playerNick?.trim();
+    if (!nick) return null;
+    const grade = computeFinalGrade(state);
+    return { nick, score: Math.round(grade.score1000) };
+  }, [state]);
 
   const handleExport = () => {
     const json = exportSave();
@@ -158,6 +181,45 @@ export function SettingsScreen() {
             aria-label="Пауза экстренных решений после обеда"
             className="data-[state=checked]:bg-amber-600"
           />
+        </div>
+      </SectionCard>
+
+      {/* Рейтинг игроков (Task 28) */}
+      <SectionCard title="Рейтинг игроков" icon={Trophy}>
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-sm text-stone-600 flex-1 min-w-[240px]">
+            Общий зачёт среди друзей: топ-50 финалов года — ник, ресторан, уровень
+            (A+…D−) и очки 0–1000. Сравниться можно и до конца года: играете под
+            своим ником, результат отправляется автоматически на финальном экране.
+            {state.playerNick ? (
+              <>
+                {' '}Ваш ник в этой партии — <b className="text-stone-800">{state.playerNick}</b>.
+              </>
+            ) : null}
+          </p>
+          <Dialog open={ratingOpen} onOpenChange={setRatingOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline" className="h-11 border-stone-300">
+                <Trophy className="h-4 w-4 mr-1.5 text-amber-500" aria-hidden />
+                Рейтинг игроков
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-lg p-0 gap-0">
+              <DialogHeader className="px-5 pt-5 pb-3">
+                <DialogTitle className="flex items-center gap-2 text-base">
+                  <Trophy className="h-4 w-4 text-amber-500" aria-hidden />
+                  Рейтинг игроков
+                </DialogTitle>
+                <DialogDescription>
+                  Топ-50 финалов: ник, ресторан, уровень и очки. Обновите, чтобы
+                  увидеть результаты друзей.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="px-5 pb-5">
+                <LeaderboardTable me={meOfCurrentGame} title="Топ финалов" />
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
       </SectionCard>
 

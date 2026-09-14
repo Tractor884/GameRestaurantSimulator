@@ -29,14 +29,14 @@ import { FINANCE, TAXES } from '../config/finance.config';
 import { monthOfDay, dayOfYear } from '../config/demandProfiles.config';
 import { LOANS } from '../config/loans.config';
 import { LOSE_CONDITIONS, DIFFICULTIES, difficultyWin } from '../config/difficulty.config';
-import { EQUIPMENT_LEVELS, DEPRECIATION_MONTHS, ALCOHOL_LICENSE } from '../config/premises.config';
+import { EQUIPMENT_LEVELS, DEPRECIATION_MONTHS, ALCOHOL_LICENSE, VERANDA } from '../config/premises.config';
 import { QUARTERLY_WEEKS } from '../config/bsc.config';
 import { RISKS_META } from '../config/risks.config';
 import { deriveRng, hashSeed } from '../rng';
 import { addTransaction, clamp } from './core';
 import { computeBSCFromState, computeFinalScore } from './bsc';
 import { computeForecast } from './forecast';
-import { weeklyTurnover } from './staff';
+import { weeklyTurnover, noteTurnoverSnapshot } from './staff';
 import { INSURANCE_PAYROLL_SHARE } from './welfare';
 import { REVIEWS_V2 } from '../config/reviews.config';
 import { PROCUREMENT } from '../config/procurement.config';
@@ -48,6 +48,7 @@ import { checkLandlordSchedule, currentRentMonthly } from './landlord';
 import { createOwnerDividendEvent, createOwnerTalkEvent, ownerReplaced } from './dividends';
 import { checkDilemmas, checkBribeScandal, checkChefQuit } from './dilemmas';
 import { franchiseRoyalty, deliveryRoyalty, leverageOf } from './permanent';
+import { autoResolveOverdueEvents } from './setup';
 
 export function closeWeek(state: GameState, seed: number): WeekSimulationResult {
   const draft = state; // мутируем переданный клон
@@ -107,7 +108,19 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     EQUIPMENT_LEVELS[restaurant.equipment.kitchen.level].maintenanceCostPerWeek +
     EQUIPMENT_LEVELS[restaurant.equipment.coffee.level].maintenanceCostPerWeek * 0.4 +
     EQUIPMENT_LEVELS[restaurant.equipment.hall.level].maintenanceCostPerWeek * 0.3;
-  const otherOperating = FINANCE.otherWeeklyCost + restaurant.marketing.cleaningBudget;
+  // ===== СОДЕРЖАНИЕ ЛЕТНЕЙ ВЕРАНДЫ (26-b) =====
+  // Пока веранда в активном окне (boughtMonth+1..сентябрь, не демонтирована
+  // и не испорчена) — недельная доля месячной стоимости уходит и в P&L
+  // (otherOperating), и в кассу (транзакция ниже, паттерн аренды/коммуналки).
+  const verandaPermit = restaurant.licenses.veranda;
+  const verandaActiveWindow =
+    !!verandaPermit &&
+    !verandaPermit.removed &&
+    !verandaPermit.spoiled &&
+    monthNow >= verandaPermit.boughtMonth + 1 &&
+    monthNow <= VERANDA.seasonLastMonth;
+  const verandaWeeklyCost = verandaActiveWindow ? Math.round(VERANDA.monthlyExtraCost / 4.33) : 0;
+  const otherOperating = FINANCE.otherWeeklyCost + restaurant.marketing.cleaningBudget + verandaWeeklyCost;
 
   // ===== ПЕРЕРАБОТКИ (БАЛ-v2 §5.2, v10) =====
   // Пиковая загрузка худшей станции недели: команда задерживается на смене,
@@ -173,6 +186,10 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   // v10 §5.2: сверхурочные — с зарплатой же и платятся (часы после 8-й ×1,5).
   if (overtime > 0) {
     addTransaction(restaurant, weekDate, 'overtime', overtime, 'out', 'Сверхурочные (×1,5 после 8 ч) — перегруз кухонных станций');
+  }
+  // 26-b: содержание веранды — кассовое списание каждой активной недели.
+  if (verandaWeeklyCost > 0) {
+    addTransaction(restaurant, weekDate, 'other', verandaWeeklyCost, 'out', 'Содержание летней веранды');
   }
   restaurant.finance.accrued.payrollGross = 0;
 
@@ -345,6 +362,9 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
   // ===== ТЕКУЧКА (конец недели) =====
   const turnoverRng = deriveRng(hashSeed(seed, week), 'turnover');
   weeklyTurnover(restaurant, () => turnoverRng.next(), week);
+  // 26-b: снапшот штатной численности ПОСЛЕ увольнений недели — окно
+  // последних 13 недель даёт KPI «Текучесть за квартал» (staff.quarterTurnoverPct).
+  noteTurnoverSnapshot(restaurant, week);
 
   // ===== БАЛ-v2 §15: ЕЖЕНЕДЕЛЬНЫЕ БРОСКИ ДИЛЕММ-ПОСЛЕДЕЙСТВИЙ =====
   // Скандал из-за взятки (5%/год) и уход шефа после отказа — отдельные
@@ -361,6 +381,54 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
 
   // ===== БАЛ-v2 §6: РАСПИСАНИЕ РАЗГОВОРОВ АРЕНДОДАТЕЛЯ =====
   checkLandlordSchedule(draft, week);
+
+  // ===== СЕЗОННАЯ ВЕРАНДА: ОКТЯБРЬ — ДЕМОНТАЖ (26-b) =====
+  // Сезон закрыт: пока веранда не убрана, каждую неделю растёт юр. риск
+  // (работа/эксплуатация улицы без действующего разрешения), а дожди и
+  // заморозки портят мебель. Игроку ставится КРИТИЧЕСКОЕ событие-дилемма
+  // veranda_teardown (блокирующий диалог): демонтировать за removalCost или
+  // оставить — порча spoilageCost + юр. риск lateLegalRisk. Просрочка 2 нед
+  // закроется авто-выбором 3:1 (autoResolveOverdueEvents ниже по потоку —
+  // событие создаётся ДО него в этой же closeWeek).
+  if (verandaPermit && !verandaPermit.removed && !verandaPermit.spoiled && monthNow >= VERANDA.seasonLastMonth + 1) {
+    const alreadyPending = draft.activeEvents.some(
+      (e) => e.templateId === 'veranda_teardown' && !e.resolved,
+    );
+    if (!alreadyPending) {
+      draft.activeEvents.push({
+        id: `evt-veranda_teardown-${week}`,
+        date: { ...weekDate },
+        templateId: 'veranda_teardown',
+        title: 'Срочно: демонтируйте летнюю веранду',
+        description:
+          'Сезон закрыт: дожди и ночные заморозки. Веранда стоит на улице без действующего разрешения — ' +
+          'мебель и оборудование портятся от погоды, а каждая неделя эксплуатации повышает юридический риск. ' +
+          'Соберите бригаду и уберите веранду до того, как она превратится в груду гнилых досок.',
+        criticality: 'critical',
+        effect: {},
+        resolved: false,
+        deadlineWeek: week + 2,
+        resolutions: [
+          {
+            label: `Демонтировать веранду (${VERANDA.removalCost.toLocaleString('ru-RU')} ₽)`,
+            cost: VERANDA.removalCost,
+            note: 'Бригада разбирает веранду и увозит мебель на склад: оборудование сохранено до следующего сезона.',
+            veranda: 'dismantle',
+            tone: 'neutral',
+          },
+          {
+            label: 'Оставить до весны',
+            cost: 0,
+            note: `Веранда зимует на улице: дожди и заморозки испортят мебель и оборудование (−${Math.round(VERANDA.spoilageCost / 1000)} тыс ₽), юридический риск +${VERANDA.lateLegalRisk}.`,
+            veranda: 'leave',
+            tone: 'negative',
+          },
+        ],
+      });
+    }
+    // Каждая неделя октября+ без демонтажа: юридический риск растёт.
+    restaurant.risks.legal = clamp(restaurant.risks.legal + VERANDA.lateLegalPerWeek, 0, 100);
+  }
 
   // ===== БАЛ-v2 §15: РОЯЛТИ ФРАНШИЗЫ (если подписана) =====
   // Движение денег (не P&L): доля сети с выручки недели.
@@ -558,6 +626,14 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     cashEnd: restaurant.finance.cash,
   };
 
+  // ===== ЕДИНАЯ СИСТЕМА «СОБЫТИЯ = ДИЛЕММЫ»: АВТО-ЗАКРЫТИЕ ПРОСРОЧЕК =====
+  // После всей событийной логики недели (дилеммы/дивиденды/арендодатель
+  // выше) и ДО формирования результата: нерешённые события с истёкшим
+  // дедлайном (2 недели) закрываются взвешенным случайным выбором 3:1
+  // в пользу негативного исхода (rng-поток 'event-timeout'). Дивиденды и
+  // арендодатель — тоже дилеммы по духу запроса: просрочка наказуема всем.
+  const autoResolved = autoResolveOverdueEvents(draft, week);
+
   const result: WeekSimulationResult = {
     week,
     dayResults,
@@ -565,7 +641,9 @@ export function closeWeek(state: GameState, seed: number): WeekSimulationResult 
     cashFlow,
     bsc,
     forecast,
-    events: draft.activeEvents.filter((e) => e.date.week === week) as GameEvent[],
+    // Автозакрытые просрочки — первыми, затем события недели, ещё висящие
+    // на решении игрока (неразрешённые, дедлайн не истёк).
+    events: [...autoResolved, ...draft.activeEvents.filter((e) => e.date.week === week)] as GameEvent[],
     riskHistory,
     quarterlyReview,
     finalScore,

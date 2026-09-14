@@ -14,7 +14,7 @@ import { DILEMMAS } from '../config/dilemmas.config';
 import { dishOf } from '../content/resolve';
 import { deriveRng, hashSeed } from '../rng';
 import { clamp } from './core';
-import { averageFatigue } from './staff';
+import { averageFatigue, noteQuit } from './staff';
 import { leverageOf } from './permanent';
 
 /* ============================= ТРИГГЕРЫ ============================= */
@@ -162,12 +162,14 @@ function createDilemmaEvent(
           cost: 0,
           note: `Убрать ~${Math.max(1, Math.round(menuSize * 0.2))} наименее популярных позиций. Порции стандартизируются: Food Cost −1 п.п. навсегда, средний чек −3% навсегда.`,
           dilemma: 'chef_accept',
+          tone: 'neutral',
         },
         {
           label: 'Отказать: карта остаётся',
           cost: 0,
           note: `Шеф обижен: риск увольнений ×${d.chefQuitMult} на ${d.chefQuitWeeks} нед, затем шеф уйдёт с шансом ${Math.round(d.chefQuitChance * 100)}%.`,
           dilemma: 'chef_refuse',
+          tone: 'negative',
         },
       ];
       break;
@@ -183,12 +185,14 @@ function createDilemmaEvent(
           cost: d.bribeCost,
           note: `Юридический риск −${d.bribeLegalDrop}. Но факт взятки остаётся с вами: риск скандала ${Math.round(d.bribeScandalYearly * 100)}%/год — удар по репутации и штраф.`,
           dilemma: 'bribe_pay',
+          tone: 'negative',
         },
         {
           label: 'Отказать: оформить всё официально',
           cost: 0,
           note: `Инспектор оформил всё по протоколу: дальнейшие проверки жёстче — штрафы ×${d.refuseFineMult} навсегда, юридический риск −${d.refuseLegalDrop}.`,
           dilemma: 'bribe_refuse',
+          tone: 'neutral',
         },
       ];
       break;
@@ -206,12 +210,14 @@ function createDilemmaEvent(
           cost: 0,
           note: `Платёж ${loan ? Math.round(loan.payment).toLocaleString('ru-RU') : '—'} → ${newPayment.toLocaleString('ru-RU')} ₽/4 нед (−25%), но срок +${d.restructureTermMonths} мес и ставка +${(d.restructureRatePP * 100).toFixed(1)} п.п. Переплата в горизонте года заметна.`,
           dilemma: 'restructure',
+          tone: 'neutral',
         },
         {
           label: 'Отказать: платим как раньше',
           cost: 0,
           note: `Банк фиксирует недоверие: кредитный лимит урезан до ${Math.round(d.refuseLimitShare * 100)}% навсегда — новые деньги в кризис брать негде.`,
           dilemma: 'restructure_refuse',
+          tone: 'negative',
         },
       ];
       break;
@@ -227,12 +233,14 @@ function createDilemmaEvent(
           cost: 0,
           note: `Спрос +${Math.round((d.franchiseDemandMult - 1) * 100)}% навсегда. Но ${Math.round(d.franchiseOwnerShare * 100)}% выручки уходят сети — навсегда (неделя за неделей).`,
           dilemma: 'franchise_accept',
+          tone: 'neutral',
         },
         {
           label: 'Отказаться: остаёмся независимыми',
           cost: 0,
           note: `Престиж шефа растёт: +${d.franchisePrestige} к перспективе «Клиенты» BSC. Развитие — своим темпом.`,
           dilemma: 'franchise_refuse',
+          tone: 'neutral',
         },
       ];
       break;
@@ -257,12 +265,14 @@ function createDilemmaEvent(
           cost: 0,
           note: `ФОТ вырастет примерно на ${Math.round(payrollWeekly * (d.crisisRaiseMult - 1)).toLocaleString('ru-RU')} ₽/нед — навсегда. Взамен: текучесть возвращается в норму.`,
           dilemma: 'raise',
+          tone: 'neutral',
         },
         {
           label: 'Держаться: переждать волну',
           cost: 0,
           note: `Экономия сейчас, счёт потом: усталость растёт быстрее (×${d.crisisQFatigueMult}), мораль −${d.crisisMoraleHit}, подбор персонала дороже ×${d.crisisHireMult} на ${d.crisisHireWeeks} нед.`,
           dilemma: 'hold',
+          tone: 'negative',
         },
       ];
       break;
@@ -288,12 +298,14 @@ function createDilemmaEvent(
           cost: 0,
           note: `ФОТ +${Math.round(payrollWeekly * (d.wageIndexMult - 1)).toLocaleString('ru-RU')} ₽/нед — навсегда (потолок индексаций ×${d.wageIndexCap}). Мораль команды +${d.wageIndexMorale}.`,
           dilemma: 'wage_accept',
+          tone: 'neutral',
         },
         {
           label: 'Отказать: оклады остаются',
           cost: 0,
           note: `Экономия сегодня — счёт завтра: мораль −${d.wageRefuseMoraleHit}, риск увольнений ×${d.wageRefuseQuitMult} на ${d.wageRefuseQuitWeeks} нед.`,
           dilemma: 'wage_refuse',
+          tone: 'negative',
         },
       ];
       break;
@@ -309,12 +321,14 @@ function createDilemmaEvent(
           cost: 0,
           note: `Спрос +${Math.round((d.deliveryDemandMult - 1) * 100)}% навсегда. Комиссия ${Math.round(d.deliveryShare * 100)}% всей выручки — каждую неделю, навсегда. Считайте экономику ДО подписи.`,
           dilemma: 'delivery_accept',
+          tone: 'neutral',
         },
         {
           label: 'Остаться офлайн-рестораном',
           cost: 0,
           note: `Репутация места, куда приходят лично: престиж +${d.deliveryPrestige} к перспективе «Клиенты» BSC.`,
           dilemma: 'delivery_refuse',
+          tone: 'neutral',
         },
       ];
       break;
@@ -457,7 +471,9 @@ export function checkBribeScandal(state: GameState, week: number, weekDate: Game
   const rng = deriveRng(hashSeed(state.seed, week), 'scandal');
   if (!rng.chance(d.bribeScandalYearly / 52)) return null;
   // Скандал: штраф 300–500 тыс, репутационный удар через риск + волна
-  // негатива (событие применяет эффекты само — как normal).
+  // негатива. ЕДИНАЯ СИСТЕМА «СОБЫТИЯ = ДИЛЕММЫ»: у события есть варианты
+  // реакции (смягчить юристами или отмолчаться); полный штраф — в
+  // негативной ветке (баланс прежнего эффекта сохранён).
   const fine = 300_000 + Math.round(rng.next() * 200_000);
   const event: GameEvent = {
     id: `evt-bribe_scandal-${week}`,
@@ -470,6 +486,22 @@ export function checkBribeScandal(state: GameState, week: number, weekDate: Game
     criticality: 'normal',
     effect: { cash: -fine, riskDelta: { reputation: 20, legal: 15 } },
     resolved: false,
+    resolutions: [
+      {
+        label: 'Юристы и публичный ответ (100 000 ₽)',
+        cost: 100_000,
+        effectDelta: { cash: -Math.round(fine * 0.3), riskDelta: { reputation: 8, legal: 8 } },
+        note: 'Часть публикаций снята, дело закрыто минимальным штрафом — удар смягчён.',
+        tone: 'neutral',
+      },
+      {
+        label: 'Отмолчаться',
+        cost: 0,
+        effectDelta: { cash: -fine, riskDelta: { reputation: 20, legal: 15 } },
+        note: 'Полный штраф, волна негатива и внимание надзорных органов.',
+        tone: 'negative',
+      },
+    ],
   };
   return event;
 }
@@ -490,7 +522,11 @@ export function checkChefQuit(state: GameState, week: number, weekDate: GameDate
   delete (r.permanentEffects ??= {}).chefQuitRisk;
   if (!rng.chance(d.chefQuitChance)) return null;
   const pool = r.staff.pools.head_chef;
-  if (pool && pool.count > 0) pool.count -= 1;
+  if (pool && pool.count > 0) {
+    pool.count -= 1;
+    // ТЕКУЧЕСТЬ (26-b): уход шефа — в счётчик quits (KPI «Персонал»).
+    noteQuit(r, 1);
+  }
   // Хедхантинг шефа дорожает в окне кадрового кризиса (если активен).
   const hiringCost = Math.round(30_000 * (r.permanentEffects?.staffCrisis && week <= r.permanentEffects.staffCrisis.untilWeek ? r.permanentEffects.staffCrisis.hireMult : 1));
   const event: GameEvent = {
@@ -510,11 +546,14 @@ export function checkChefQuit(state: GameState, week: number, weekDate: GameDate
         cost: hiringCost,
         note: 'Хедхантинг: новый шеф со следующего дня, 7 дней адаптации (КПД ниже нормы).',
         hire: { roleId: 'head_chef' },
+        tone: 'neutral',
       },
       {
         label: 'Оставить вакансию открытой',
         cost: 0,
+        effectDelta: {},
         note: 'Экономия сейчас: качество блюд и организация кухни падают, станциям труднее держать темп.',
+        tone: 'negative',
       },
     ],
   };

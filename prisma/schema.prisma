@@ -1,8 +1,9 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+// Рейтинг игроков (Task 28): каждая завершённая игра (52 недели или банкротство)
+// = отдельная строка истории попыток. Ник берётся из визарда открытия,
+// уровень/очки — из computeFinalGrade (rank D−…A+, score1000 0–1000).
 
 generator client {
   provider = "prisma-client-js"
@@ -13,20 +14,16 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
+model PlayerResult {
+  id             String   @id @default(cuid())
+  nick           String // 2–24 символа
+  restaurantName String
+  level          String // ранг A+…D− (computeFinalGrade.rank)
+  score          Int // 0–1000
+  difficulty     String // novice|standard|professional
+  weeksLived     Int // сколько недель прожито
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  @@index([score])
 }

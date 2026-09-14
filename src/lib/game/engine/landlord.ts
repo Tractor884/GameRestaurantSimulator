@@ -72,12 +72,13 @@ function buildOffer(state: GameState, week: number): GameEvent {
     effect: {},
     resolved: false,
     resolutions: [
-      { label: `Согласиться на +${pct}%`, cost: 0, note, landlord: 'accept' },
+      { label: `Согласиться на +${pct}%`, cost: 0, note, landlord: 'accept', tone: 'neutral' },
       {
         label: 'Отказаться',
         cost: 0,
         note: `Отношения с арендодателем ухудшатся (−${LANDLORD.refusalRelation}). Он вернётся с более жёстким предложением.`,
         landlord: 'refuse',
+        tone: 'negative',
       },
     ],
   };
@@ -107,12 +108,14 @@ function buildUltimatum(state: GameState, week: number): GameEvent {
         cost: 0,
         note: `Аренда вырастет с ${rentNow.toLocaleString('ru-RU')} до ${rentAfter.toLocaleString('ru-RU')} ₽/мес — окончательно.`,
         landlord: 'accept_ultimatum',
+        tone: 'neutral',
       },
       {
         label: 'Переехать в новое помещение',
         cost: 0,
         note: `${(LANDLORD.relocationCost / 1_000_000).toFixed(0)} млн ₽ на переезд и ремонт, ${LANDLORD.relocationDemandWeeks} недели спрос −${Math.round((1 - LANDLORD.relocationDemandFactor) * 100)}%, аренда от базы ${rentRelocated.toLocaleString('ru-RU')} ₽/мес. Оборудование, лицензии и ремонт сохраняются.`,
         landlord: 'relocate',
+        tone: 'negative',
       },
     ],
   };

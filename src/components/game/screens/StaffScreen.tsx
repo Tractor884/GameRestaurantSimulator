@@ -1,6 +1,7 @@
 /**
  * Экран «Персонал» (ТЗ §19/§14): штат по ролям, усталость/мораль,
- * найм/увольнение, ФОТ и Labor Cost.
+ * найм/увольнение, ФОТ, Labor Cost и текучесть (KPI за квартал, 27-b:
+ * движковые счётчики/снапшоты 26-b становятся видимыми игроку).
  */
 'use client';
 
@@ -20,20 +21,57 @@ import {
 import { STAFF_ROLES, ROLE_IDS } from '@/lib/game/config/staffRoles.config';
 import { TAXES } from '@/lib/game/config/finance.config';
 import { hourlyRate, dayCoverage } from '@/lib/game/engine/staff';
-import { InfoHint } from '../hints';
+import { InfoHint, type HintContent } from '../hints';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
-import { Users, UserPlus, UserMinus, Wallet, Percent, Coins, Gift, GraduationCap, HeartPulse } from 'lucide-react';
+import {
+  Users,
+  UserPlus,
+  UserMinus,
+  Wallet,
+  Percent,
+  Coins,
+  Gift,
+  GraduationCap,
+  HeartPulse,
+  TrendingDown,
+} from 'lucide-react';
 import type { RoleId } from '@/lib/game/types';
 import { CharacterPanel } from '../visual/CharacterPanel';
 import { getStaffRoleMood } from '@/lib/game/presentation';
 import { MOOD_UI } from '../visual/characterMeta';
-import { bonusCost, trainingCost, BONUS_COOLDOWN_DAYS, TRAINING_COOLDOWN_DAYS, absoluteDay } from '@/lib/game/engine';
+import {
+  bonusCost,
+  trainingCost,
+  BONUS_COOLDOWN_DAYS,
+  TRAINING_COOLDOWN_DAYS,
+  absoluteDay,
+  quarterTurnoverPct,
+} from '@/lib/game/engine';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+
+/** «12,5%» — quarterTurnoverPct уже возвращает проценты; запятая как в ru-RU. */
+function fmtPctRu(v: number): string {
+  return `${v.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`;
+}
+
+/** Подсказка KPI «Текучесть (квартал)» — нормы из урока Академии «turnover-cost». */
+const TURNOVER_HINT: HintContent = {
+  title: 'Текучесть (квартал)',
+  body: 'Ушедшие за квартал ÷ средняя численность штата: увольнения вами + уходы по своей воле (низкая мораль, события, шеф). Норма ≤15–20%; выше 40% — красная зона: постоянное обучение новичков съедает прибыль (урок «Текучесть» в Академии).',
+  advice:
+    'Текучесть лечится условиями, а не только окладами: справедливые графики, премии и страховка дешевле, чем замена половины команды за год.',
+};
+
+/** Подсказка строки «Ушли за год» (счётчики за игру). */
+const TURNOVER_DETAIL_HINT: HintContent = {
+  title: 'Ушли за год',
+  body: 'Все, кто покинул ресторан за игровой год: ушли сами (мораль ниже порога, события, уход шефа) и уволены вашим решением; рядом — сколько людей вы наняли за то же время.',
+};
 
 export function StaffScreen() {
   const state = useGame((s) => s.state)!;
@@ -84,6 +122,18 @@ export function StaffScreen() {
     return sum / 7;
   }, [staff]);
 
+  /* ТЕКУЧЕСТЬ (движок 26-b → UI 27-b): KPI за квартал из снапшотов численности
+   * (null — меньше 4 недель истории, «собираем данные») + счётчики за игру. */
+  const turnoverPct = useMemo(() => quarterTurnoverPct(staff), [staff]);
+  const turnover = staff.turnover ?? null;
+  const turnoverDetail = useMemo(
+    () =>
+      turnover
+        ? `${turnover.quitTotal + turnover.firedTotal} (уволены ${turnover.firedTotal} · сами ${turnover.quitTotal}) · нанято ${turnover.hiredTotal}`
+        : '—',
+    [turnover],
+  );
+
   const warnings: string[] = [];
   if (coverage < 0.85) {
     warnings.push(
@@ -93,6 +143,12 @@ export function StaffScreen() {
   if (laborCostPct !== null && laborCostPct > 0.34) {
     warnings.push(
       `Labor Cost ${pct(laborCostPct)} — выше целевых 25–32%. Проверьте графики: возможно, смен избыточны.`,
+    );
+  }
+  // Текучесть >40% — красная зона (урок Академии «turnover-cost»).
+  if (turnoverPct !== null && turnoverPct > 40) {
+    warnings.push(
+      `Текучесть ${fmtPctRu(turnoverPct)} — команда выгорает/утекает: проверьте мораль, графики и оклады.`,
     );
   }
   // v10 §5.2: сверхурочные за последнюю закрытую неделю — перегруз кухонных
@@ -110,7 +166,7 @@ export function StaffScreen() {
       <div className="grid gap-4 items-start lg:grid-cols-[280px,1fr]">
         <CharacterPanel characterId="hr" vertical />
         <div className="space-y-4 min-w-0">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <KpiCard
           icon={Users}
           label="Штат"
@@ -147,6 +203,27 @@ export function StaffScreen() {
           hint="morale"
           tone={avgMorale >= 60 ? 'good' : avgMorale >= 40 ? 'warn' : 'bad'}
         />
+        {/* Текучесть (27-b): на мобайле карточка занимает всю ширину строки,
+            на md+ — пятая колонка. Обёртка — чтобы Card тянулась на высоту
+            соседей (KpiCard не принимает className). */}
+        <div className="col-span-2 md:col-span-1 [&>div]:h-full">
+          <KpiCard
+            icon={TrendingDown}
+            label="Текучесть (квартал)"
+            value={turnoverPct === null ? '—' : fmtPctRu(turnoverPct)}
+            sub={turnoverPct === null ? 'собираем данные (4+ нед)' : 'норма ≤15–20%'}
+            hint={TURNOVER_HINT}
+            tone={
+              turnoverPct === null
+                ? 'default'
+                : turnoverPct <= 20
+                  ? 'good'
+                  : turnoverPct <= 40
+                    ? 'warn'
+                    : 'bad'
+            }
+          />
+        </div>
       </div>
 
       {warnings.length > 0 && <WarningBanner warnings={warnings} />}
@@ -237,6 +314,7 @@ export function StaffScreen() {
         <div className="grid md:grid-cols-2 gap-x-8">
           <div>
             <MetricRow label="Сотрудников в штате" value={`${totalHeadcount} чел`} />
+            <MetricRow label="Ушли за год" value={turnoverDetail} hint={TURNOVER_DETAIL_HINT} />
             <MetricRow
               label="Смен запланировано (нед)"
               value={String(

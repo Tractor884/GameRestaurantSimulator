@@ -43,18 +43,21 @@ export function createOwnerDividendEvent(
         cost: proposed,
         note: `${Math.round(DIVIDENDS.fcfShare * 100)}% FCF + ${Math.round(DIVIDENDS.profitShare * 100)}% прибыли сверх ${Math.round(DIVIDENDS.profitThresholdRevShare * 100)}% квартальной выручки. Доверие +${DIVIDENDS.trustPayGood}: владельцу видно, что ресторан не «кубышка», а источник дохода.`,
         dividend: { fraction: 1 },
+        tone: 'neutral',
       },
       {
         label: `Выплатить половину — ${fmt(Math.round(proposed / 2))} ₽`,
         cost: Math.round(proposed / 2),
         note: 'Баланс развития и доверия: половину — в кассу как подушка, половину — владельцу. Доверие не растёт, но и не тает.',
         dividend: { fraction: 0.5 },
+        tone: 'neutral',
       },
       {
         label: 'Перенести выплату',
         cost: 0,
         note: `«Все деньги — в развитие». При сильном FCF владелец запомнит отказ (−${DIVIDENDS.trustPayZero} доверия); при слабом простит (−${DIVIDENDS.trustPayLow}).`,
         dividend: { fraction: 0 },
+        tone: 'negative',
       },
     ],
   };
@@ -81,12 +84,14 @@ export function createOwnerTalkEvent(trust: number, date: GameDate): GameEvent {
         cost: 0, // фактическая сумма считается в момент решения (касса живая)
         note: `Принудительное распределение: владелец забирает ${share}% счёта и снимает претензии (доверие +${DIVIDENDS.dilemmaTrustRelief}).`,
         ownerForcePay: { cashShare: DIVIDENDS.dilemmaCashShare },
+        tone: 'neutral',
       },
       {
         label: 'Отказать и защитить план развития',
         cost: 0,
         note: `«Деньги нужны ресторану». Доверие −${DIVIDENDS.dilemmaTrustRefuse}, финансовый риск +${DIVIDENDS.dilemmaRiskRefuse} (владелец усиливает контроль и давит на банк). Ещё пара таких разговоров — и вас сменят.`,
         ownerRefuse: { trust: DIVIDENDS.dilemmaTrustRefuse, risk: DIVIDENDS.dilemmaRiskRefuse },
+        tone: 'negative',
       },
     ],
   };
