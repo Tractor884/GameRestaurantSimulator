@@ -1,0 +1,26 @@
+# Симулятор ресторана — сервис общего рейтинга игроков.
+# Копия этого файла: /etc/systemd/system/restsim-api.service
+# После копирования: sudo systemctl daemon-reload && sudo systemctl enable --now restsim-api
+[Unit]
+Description=Симулятор ресторана — сервис рейтинга игроков (Node)
+After=network.target
+
+[Service]
+Type=simple
+# Путь к node проверьте командой: which node (по умолчанию /usr/bin/node)
+ExecStart=/usr/bin/node /var/www/restsim/server/server.js
+WorkingDirectory=/var/www/restsim/server
+# Снаружи сервис не виден: только nginx ходит на 127.0.0.1:3001
+Environment=HOST=127.0.0.1
+# Перезапуск при сбое и после перезагрузки сервера
+Restart=always
+RestartSec=3
+# От чьего имени работает (веб-сервер); нужны права на папку server/data:
+# sudo chown -R www-data:www-data /var/www/restsim/server
+User=www-data
+Group=www-data
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

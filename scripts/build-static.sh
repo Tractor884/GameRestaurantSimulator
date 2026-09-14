@@ -6,12 +6,15 @@
 #      dev-сервер и его .next (в песочнице нельзя запускать прод-сборку в корне).
 #   2. Вырезает из копии рабочие материалы (game-art/_review, _prompts.md) —
 #      игрокам они не нужны, на сервер не едут.
-#   3. Вырезает из копии API-роуты (src/app/api) — output:"export" их не умеет,
-#      а рейтинг в оффлайн-версии работает через локальную историю (Task 30).
+#   3. Вырезает из копии API-роуты (src/app/api) — output:"export" их не умеет;
+#      вместо них на VPS работает мини-сервис рейтинга (server/server.js, Task 31).
 #   4. Подменяет next.config.ts на статический вариант (output: "export"):
 #      основной конфиг проекта остаётся дев-режимным (API + Prisma в песочнице).
 #   5. Запускает `next build` → deploy-build/out/.
-#   6. Пакует out/ в public/deploy/<имя>.tar.gz — архив скачивается с dev-сервера
+#   6. ДОБАВЛЯЕТ в пакет мини-сервис рейтинга (server/: server.js из
+#      mini-services/leaderboard-service + systemd-юнит + nginx-конфиг) и
+#      INSTALL.md с полной инструкцией по установке (Task 31).
+#   7. Пакует out/ в public/deploy/<имя>.tar.gz — архив скачивается с dev-сервера
 #      через URL /deploy/<имя>.tar.gz и раскатывается на VPS (см. worklog).
 #
 # Использование: bash scripts/build-static.sh [имя-архива-без-расширения]
@@ -23,20 +26,20 @@ ROOT="/home/z/my-project"
 BUILD="$ROOT/deploy-build"
 NAME="${1:-restsim-game}"
 
-echo "==> 1/6: подготовка копии проекта"
+echo "==> 1/7: подготовка копии проекта"
 rm -rf "$BUILD"
 mkdir -p "$BUILD"
 cd "$ROOT"
 cp -r src public next.config.ts package.json tsconfig.json postcss.config.mjs tailwind.config.ts components.json "$BUILD/"
 
-echo "==> 2/6: чистка рабочих материалов из копии"
+echo "==> 2/7: чистка рабочих материалов из копии"
 rm -rf "$BUILD/public/game-art/_review" "$BUILD/public/game-art/_prompts.md"
 rm -rf "$BUILD/public/deploy"
 
-echo "==> 3/6: вырезаем API-роуты (статика их не поддерживает)"
+echo "==> 3/7: вырезаем API-роуты (статика их не поддерживает)"
 rm -rf "$BUILD/src/app/api"
 
-echo "==> 4/6: подменяем next.config.ts на статический (output: export)"
+echo "==> 4/7: подменяем next.config.ts на статический (output: export)"
 cat > "$BUILD/next.config.ts" <<'EOF'
 import type { NextConfig } from "next";
 
@@ -58,15 +61,27 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 EOF
 
-echo "==> 5/6: статическая сборка Next.js (output: export)"
+echo "==> 5/7: статическая сборка Next.js (output: export)"
 cd "$BUILD"
 node "$ROOT/node_modules/next/dist/bin/next" build
 
-echo "==> 6/6: проверка out/ и упаковка"
+echo "==> 6/7: добавляем мини-сервис рейтинга (Task 31) и инструкцию"
+mkdir -p "$BUILD/out/server"
+# Сам сервис — источник истины в mini-services/leaderboard-service/index.js
+cp "$ROOT/mini-services/leaderboard-service/index.js" "$BUILD/out/server/server.js"
+# Конфиги автозапуска и веб-сервера для VPS
+cp "$ROOT/deploy/restsim-api.service" "$BUILD/out/server/"
+cp "$ROOT/deploy/nginx-restsim.conf" "$BUILD/out/server/"
+# Полная инструкция по установке «как в первый раз»
+cp "$ROOT/deploy/INSTALL.md" "$BUILD/out/INSTALL.md"
+test -f "$BUILD/out/server/server.js" || { echo "ОШИБКА: server/server.js не найден"; exit 1; }
+
+echo "==> 7/7: проверка out/ и упаковка"
 test -f "$BUILD/out/index.html" || { echo "ОШИБКА: out/index.html не найден"; exit 1; }
 du -sh "$BUILD/out"
 mkdir -p "$ROOT/public/deploy"
 git -C "$ROOT" log -1 --format="commit %h от %ad" --date=short > "$BUILD/out/VERSION"
+echo "Сервис рейтинга и инструкция: в архиве server/ + INSTALL.md (см. deploy/INSTALL.md)"
 tar -czf "$ROOT/public/deploy/${NAME}.tar.gz" -C "$BUILD/out" .
 ls -lh "$ROOT/public/deploy/${NAME}.tar.gz"
 echo ""

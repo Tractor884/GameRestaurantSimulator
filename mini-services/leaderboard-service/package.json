@@ -1,0 +1,11 @@
+{
+  "name": "restsim-leaderboard-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Мини-сервис общего рейтинга игроков «Симулятор ресторана» для VPS: GET/POST /api/leaderboard, хранение в JSON-файле, ноль зависимостей (чистый Node.js).",
+  "main": "index.js",
+  "scripts": {
+    "dev": "bun --hot index.js",
+    "start": "node index.js"
+  }
+}
