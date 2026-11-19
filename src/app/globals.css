@@ -1,7 +1,9 @@
+@import url("https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,400..900;1,400..900&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
+@custom-variant cartoon (&:is(.cartoon *));
 
 @theme inline {
   --color-background: var(--background);
@@ -141,4 +143,105 @@
 }
 *::-webkit-scrollbar-thumb:hover {
   background-color: #a8a29e; /* stone-400 */
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   МУЛЬТЯШНАЯ ТЕМА (cartoon) — включается классом .cartoon на <html>
+   (src/lib/game/store/themeStore.ts). Игровой вид без правок в экранах:
+   карточки-«подушки» с толстой обводкой и жёсткой тенью, тёплый фон,
+   скруглённые таблицы/ползунки/кнопки. Отключается в «Настройках».
+   ════════════════════════════════════════════════════════════════════════ */
+.cartoon body {
+  font-family: "Nunito", var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.01em;
+  background:
+    radial-gradient(circle at 12% 8%, rgba(253, 230, 138, 0.55), transparent 42%),
+    radial-gradient(circle at 88% 4%, rgba(254, 215, 170, 0.5), transparent 40%),
+    radial-gradient(circle at 50% 110%, rgba(209, 250, 229, 0.45), transparent 45%),
+    linear-gradient(180deg, #fffbef 0%, #fdf3e3 100%);
+  background-attachment: fixed;
+}
+
+/* Карточки shadcn → «подушки» с обводкой и жёсткой мультяшной тенью */
+.cartoon .rounded-xl,
+.cartoon .rounded-lg,
+.cartoon .rounded-md {
+  border-radius: 1.1rem;
+}
+.cartoon .border,
+.cartoon .border-b,
+.cartoon .border-t,
+.cartoon .border-l,
+.cartoon .border-r,
+.cartoon [class*="border-stone"],
+.cartoon [class*="border-amber"] {
+  border-color: #f0d9ac;
+}
+.cartoon .bg-white {
+  background-color: #fffdf6;
+}
+.cartoon .shadow-sm {
+  box-shadow: 0 3px 0 0 rgba(180, 132, 58, 0.18);
+}
+.cartoon .shadow-md {
+  box-shadow: 0 5px 0 0 rgba(180, 132, 58, 0.22);
+}
+.cartoon .shadow {
+  box-shadow: 0 4px 0 0 rgba(180, 132, 58, 0.2);
+}
+/* Числа вместо моноширинных «термометров» — мягкий округлый табличный вид */
+.cartoon .tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+/* Топбар и боковик: полупрозрачные, тёплые */
+.cartoon header {
+  background-color: rgba(255, 253, 246, 0.92) !important;
+  backdrop-filter: blur(6px);
+}
+.cartoon nav {
+  background-color: rgba(255, 253, 246, 0.9) !important;
+}
+
+/* Таблицы: строки-капсулы вместо сетки отчётов */
+.cartoon table thead tr {
+  background-color: #fef3c7;
+}
+.cartoon table th {
+  color: #92400e;
+  font-weight: 800;
+}
+.cartoon table tbody tr {
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+.cartoon table tbody tr:hover {
+  background-color: #fef9e7;
+  transform: translateY(-1px);
+}
+
+/* Кнопки: «желейные» — при нажатии оседают вместе с тенью */
+.cartoon button:not(.no-cartoon):active {
+  transform: translateY(2px) scale(0.98);
+}
+
+/* Прогресс-бары и скролл-области в тон теме */
+.cartoon [role="progressbar"] {
+  background-color: #fdeecd;
+  border: 2px solid #f0d9ac;
+}
+.cartoon * {
+  scrollbar-color: #fcd34d transparent;
+}
+.cartoon *::-webkit-scrollbar-thumb {
+  background-color: #fcd34d;
+}
+.cartoon *::-webkit-scrollbar-thumb:hover {
+  background-color: #f59e0b;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cartoon .animate-pulse {
+    animation-duration: 2.4s;
+  }
 }

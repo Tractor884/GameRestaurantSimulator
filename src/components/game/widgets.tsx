@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { InfoHint, HINTS, type HintContent, type HintKey } from './hints';
 import { MOOD_UI } from './visual/characterMeta';
+import { useThemeStore } from '@/lib/game/store/themeStore';
 import type { Mood } from '@/lib/game/presentation/types';
 import {
   AlertTriangle,
@@ -19,6 +20,35 @@ import {
   Inbox,
   type LucideIcon,
 } from 'lucide-react';
+
+/* ─────────── МУЛЬТЯШНАЯ ТЕМА: «звериный» язык цифр ───────────
+ * В cartoon-режиме длинные числа прячутся за игровые единицы:
+ * 1 ₽ → 🪙, 1 000 ₽ → 🧺 («корзина монет»), 1 000 000 ₽ → 🏦.
+ * Точность сохраняется: при наведении (title) — обычная сумма. */
+const MONEY_UNITS_CARTOON: [number, string][] = [
+  [1_000_000, '🏦'],
+  [1_000, '🧺'],
+];
+
+/** Эмодзи-«лицо» KPI для мультяшной темы (по ключевым словам подписи). */
+export function KPI_EMOJI(label: string): string {
+  const l = label.toLowerCase();
+  if (/выруч|продаж|оборач/.test(l)) return '💰';
+  if (/прибыл|марж|ebitda/.test(l)) return '📈';
+  if (/убыт|расход|затрат/.test(l)) return '💸';
+  if (/food.?cost|себестоим|продукт/.test(l)) return '🥘';
+  if (/labor|зарплат|ФОТ/.test(l)) return '👥';
+  if (/рейтинг|звезд|отзыв|репутаци/.test(l)) return '⭐';
+  if (/гост|трафик|посещаем|чек/.test(l)) return '🍽️';
+  if (/склад|запас|остатк/.test(l)) return '📦';
+  if (/устал|морал|команд|персонал/.test(l)) return '😴';
+  if (/касс|баланс|деньг|наличн/.test(l)) return '💵';
+  if (/долг|кредит|заём/.test(l)) return '🏦';
+  if (/санитар|haccp|лиценз|проверк/.test(l)) return '🧼';
+  if (/износ|оборудован|поломк/.test(l)) return '🔧';
+  if (/цель|план|bsc/.test(l)) return '🎯';
+  return '✨';
+}
 
 /** Разрешение подсказки: ключ из HINTS / готовый объект / произвольный текст. */
 export function resolveHint(
@@ -126,17 +156,25 @@ export function KpiCard({
     bad: 'text-red-700',
     warn: 'text-amber-700',
   }[tone];
+  // Мультяшная тема: подписи KPI получают «игровое» лицо (эмодзи-иконка),
+  // классы карточки становятся «подушечными» (cartoon:* варианты Tailwind).
+  const cartoon = useThemeStore((s) => s.cartoon);
   const hintContent = resolveHint(hint, label);
   return (
     <Card
       data-kpi={label}
-      className="group border-stone-200 bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-amber-300 hover:shadow-md active:translate-y-0 active:shadow-sm focus-within:border-amber-400"
+      className={cn(
+        'group border-stone-200 bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-amber-300 hover:shadow-md active:translate-y-0 active:shadow-sm focus-within:border-amber-400',
+        cartoon && 'cartoon:border-4 cartoon:border-amber-200 cartoon:bg-[#fffdf6] cartoon:hover:-rotate-1',
+      )}
     >
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="text-xs text-stone-500 font-medium uppercase tracking-wide truncate flex items-center gap-1">
-              <span className="truncate">{label}</span>
+              <span className="truncate">
+                {cartoon ? `${KPI_EMOJI(label)} ${label}` : label}
+              </span>
               {hintContent && <InfoHint hint={hintContent} />}
             </p>
             <p className={cn('text-xl font-bold tabular-nums mt-1', toneCls)}>{value}</p>
@@ -286,6 +324,9 @@ export function ScoreBar({
 }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
   const color = pct >= 70 ? 'bg-emerald-500' : pct >= 45 ? 'bg-amber-500' : 'bg-red-500';
+  // Мультяшная тема: полоски превращаем в «шкалу настроения» со смайлом.
+  const cartoon = useThemeStore((s) => s.cartoon);
+  const face = pct >= 70 ? '😄' : pct >= 45 ? '😐' : '😟';
   const hintContent = resolveHint(hint, label);
   return (
     <div>
@@ -295,6 +336,7 @@ export function ScoreBar({
           {hintContent && <InfoHint hint={hintContent} />}
         </span>
         <span className="font-semibold tabular-nums text-stone-800">
+          {cartoon ? `${face} ` : ''}
           {value.toFixed(0)}
           {unit}
         </span>
@@ -373,6 +415,25 @@ export function moneyShort(v: number): string {
   if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(2)} млн ₽`;
   if (abs >= 10_000) return `${sign}${Math.round(abs / 1000)} тыс ₽`;
   return `${sign}${Math.round(abs).toLocaleString('ru-RU')} ₽`;
+}
+
+/** Мультяшная версия moneyShort: «3.4 🧺» вместо «3 400 тыс ₽» и т.п.
+ *  Точная сумма — в title/aria при наведении. */
+export function moneyCartoon(v: number): string {
+  const sign = v < 0 ? '−' : '';
+  const abs = Math.abs(v);
+  for (const [unit, icon] of MONEY_UNITS_CARTOON) {
+    if (abs >= unit) {
+      const n = abs / unit;
+      return `${sign}${n >= 100 ? Math.round(n) : n.toFixed(1).replace(/\.0$/, '')} ${icon}`;
+    }
+  }
+  return `${sign}${Math.round(abs)} 🪙`;
+}
+
+/** Деньги с учётом активной темы (строгий/мультяшный формат). */
+export function moneyT(v: number): string {
+  return useThemeStore.getState().cartoon ? moneyCartoon(v) : moneyShort(v);
 }
 
 export function pct(v: number, digits = 1): string {

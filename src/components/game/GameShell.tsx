@@ -13,7 +13,10 @@ import { toast } from 'sonner';
 import { useGame, type ScreenId } from '@/lib/game/store/gameStore';
 import { EVENT_TEMPLATES_MAP } from '@/lib/game/config/risks.config';
 import { DIFFICULTIES } from '@/lib/game/config/difficulty.config';
-import { moneyShort, money } from './widgets';
+import { moneyShort, moneyCartoon, money } from './widgets';
+import { useThemeStore } from '@/lib/game/store/themeStore';
+import { CharacterPortrait } from './visual/CharacterPortrait';
+import type { CharacterId, Mood } from '@/lib/game/presentation/types';
 import { cn } from '@/lib/utils';
 import {
   Utensils,
@@ -52,6 +55,9 @@ import { EmergencyDialog } from './EmergencyDialog';
 import { MentorWidget } from './MentorWidget';
 import { AchievementsWatcher } from './AchievementsWatcher';
 import { useUiPrefs } from '@/lib/game/store/uiPrefs';
+import { useThemeStore } from '@/lib/game/store/themeStore';
+import { getCharacterMood } from '@/lib/game/presentation/characters';
+import type { CharacterId, Mood } from '@/lib/game/presentation/types';
 import { useArtStore } from '@/lib/game/presentation/artState';
 import dynamic from 'next/dynamic';
 import { RestaurantScreen } from './screens/RestaurantScreen';
@@ -196,6 +202,26 @@ const NAV: { group: string; items: { id: ScreenId; label: string; icon: typeof U
 
 const DAYS_RU = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
+/**
+ * Талисманы команды (мультяшная тема): портреты персонажей в шапке.
+ * Настроение — из presentation-слоя; без арта CharacterPortrait сам
+ * рисует фолбэк (иконка роли + инициал), так что вид не ломается.
+ */
+function MascotsRow({ state }: { state: NonNullable<ReturnType<typeof useGame.getState>['state']> }) {
+  const items: { id: CharacterId; mood: Mood }[] = [
+    { id: 'owner', mood: getCharacterMood(state, 'owner') },
+    { id: 'chef', mood: getCharacterMood(state, 'chef') },
+    { id: 'hr', mood: getCharacterMood(state, 'hr') },
+  ];
+  return (
+    <div className="hidden md:flex items-end gap-1" aria-hidden>
+      {items.map(({ id, mood }) => (
+        <CharacterPortrait key={id} characterId={id} mood={mood} size={40} className="-rotate-2 even:rotate-2" />
+      ))}
+    </div>
+  );
+}
+
 export function GameShell() {
   const state = useGame((s) => s.state);
   const screen = useGame((s) => s.screen);
@@ -208,6 +234,8 @@ export function GameShell() {
   const resolveCritical = useGame((s) => s.resolveCritical);
   const toasts = useGame((s) => s.lastToasts);
   const dismiss = useGame((s) => s.dismissToasts);
+  const cartoon = useThemeStore((s) => s.cartoon);
+  const toggleCartoon = useThemeStore((s) => s.toggleTheme);
 
   const restaurant = state?.restaurant;
   const lastWeek = state?.history.weekStats[state.history.weekStats.length - 1];
@@ -335,11 +363,36 @@ export function GameShell() {
 
           <div className="flex-1" />
 
+          {/* Талисманы команды (мультяшная тема): Игорь, Максим и Анна в шапке */}
+          {cartoon && state ? <MascotsRow state={state} /> : null}
+
           {/* Наставник: контекстная подсказка по живым KPI (рекомендация №2) */}
           <MentorWidget />
 
           {/* Достижения: пассивный наблюдатель (тосты при выполнении условий, рекомендация №8); рендерит null */}
           <AchievementsWatcher />
+
+          {/* Оформление «Строгое/Мультяшное»: быстрый переключатель темы (сама настройка — в «Настройках») */}
+          <button
+            type="button"
+            onClick={toggleCartoon}
+            title={
+              cartoon
+                ? 'Мультяшное оформление включено. Нажмите, чтобы вернуться к строгому аналитическому виду'
+                : 'Включить мультяшное оформление: карточки-подушки, тёплые цвета, персонажи'
+            }
+            aria-label={`Оформление: ${cartoon ? 'мультяшное' : 'строгое'} (переключить)`}
+            aria-pressed={cartoon}
+            className={cn(
+              'hidden sm:inline-flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400',
+              cartoon
+                ? 'border-orange-300 bg-orange-100 text-orange-800 hover:bg-orange-200'
+                : 'border-stone-200 bg-white text-stone-500 hover:text-stone-800 hover:border-stone-300',
+            )}
+          >
+            <span className="text-sm leading-none" aria-hidden>{cartoon ? '🎨' : '📊'}</span>
+            <span className="hidden lg:inline">{cartoon ? 'Мультяшко' : 'Строго'}</span>
+          </button>
 
           {/* Плотность информации «Новичок/Эксперт» (UI/UX №5): быстрый переключатель (сама настройка — в «Настройках») */}
           <button
@@ -366,14 +419,14 @@ export function GameShell() {
             <span className="hidden lg:inline">{density === 'novice' ? 'Новичок' : 'Эксперт'}</span>
           </button>
 
-          {/* Мини-виджеты */}
+          {/* Мини-виджеты (в мультяшной теме — игровые единицы 🪙/🧺/🏦) */}
           <div className="hidden md:flex items-center gap-4 text-sm">
-            <div className="flex items-center gap-1.5" title="Деньги на счёте">
+            <div className="flex items-center gap-1.5" title={`Деньги на счёте: ${money(restaurant.finance.cash)}`}>
               <Banknote className="h-4 w-4 text-emerald-600" aria-hidden />
-              <span className="font-bold tabular-nums text-stone-900">{moneyShort(restaurant.finance.cash)}</span>
+              <span className="font-bold tabular-nums text-stone-900">{cartoon ? moneyCartoon(restaurant.finance.cash) : moneyShort(restaurant.finance.cash)}</span>
             </div>
             {lastWeek && (
-              <div className="flex items-center gap-1.5" title="Прибыль за последнюю неделю">
+              <div className="flex items-center gap-1.5" title={`Прибыль за последнюю неделю: ${money(lastWeek.netProfit)}`}>
                 <TrendingUp className="h-4 w-4 text-stone-400" aria-hidden />
                 <span
                   className={cn(
@@ -381,7 +434,7 @@ export function GameShell() {
                     lastWeek.netProfit >= 0 ? 'text-emerald-700' : 'text-red-700',
                   )}
                 >
-                  {moneyShort(lastWeek.netProfit)}
+                  {cartoon ? moneyCartoon(lastWeek.netProfit) : moneyShort(lastWeek.netProfit)}
                 </span>
               </div>
             )}

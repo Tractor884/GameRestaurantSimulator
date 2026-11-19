@@ -7,6 +7,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useGame, type SaveMeta } from '@/lib/game/store/gameStore';
 import { useUiPrefs } from '@/lib/game/store/uiPrefs';
+import { useThemeStore, type ThemeMode } from '@/lib/game/store/themeStore';
 import { SectionCard, money, moneyShort } from '../widgets';
 import { LeaderboardTable } from '../LeaderboardTable';
 import { computeFinalGrade } from '@/lib/game/engine';
@@ -62,6 +63,8 @@ export function SettingsScreen() {
   const middayPause = state.options?.middayPause ?? true;
   const density = useUiPrefs((s) => s.density);
   const setDensity = useUiPrefs((s) => s.setDensity);
+  const theme = useThemeStore((s) => s.theme);
+  const setTheme = useThemeStore((s) => s.setTheme);
 
   const [refresh, setRefresh] = useState(0);
   const [importError, setImportError] = useState<string | null>(null);
@@ -108,6 +111,47 @@ export function SettingsScreen() {
     <div className="space-y-4">
       {/* Интерфейс: плотность информации (UI/UX-рекомендация №5) */}
       <SectionCard title="Интерфейс" icon={Gauge}>
+        {/* Оформление: строгий дашборд ↔ мультяшный игровой вид с персонажами */}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between pb-3 mb-3 border-b border-stone-100">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-stone-800">Оформление</p>
+            <p className="text-xs text-stone-500 mt-0.5 max-w-xl">
+              «Строгое» — аналитический дашборд. «Мультяшное» 🎨 — игра: тёплые карточки-подушки,
+              округлый шрифт, персонажи-талисманы в шапке, деньги в игровых единицах (🪙/🧺/🏦,
+              точная сумма — при наведении). Настройка не влияет на игру.
+            </p>
+          </div>
+          <div
+            className="flex rounded-lg border border-stone-200 bg-stone-50 p-1 shrink-0"
+            role="radiogroup"
+            aria-label="Режим оформления интерфейса"
+          >
+            {(
+              [
+                { id: 'clean', label: '📊 Строгое', hint: 'аналитический дашборд' },
+                { id: 'cartoon', label: '🎨 Мультяшное', hint: 'игровой вид с персонажами' },
+              ] as const
+            ).map((mode: { id: ThemeMode; label: string; hint: string }) => (
+              <button
+                key={mode.id}
+                type="button"
+                role="radio"
+                aria-checked={theme === mode.id}
+                title={mode.hint}
+                onClick={() => setTheme(mode.id)}
+                className={cn(
+                  'min-h-9 rounded-md px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400',
+                  theme === mode.id
+                    ? 'bg-amber-100 text-amber-900 shadow-sm'
+                    : 'text-stone-500 hover:text-stone-800',
+                )}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
           <div className="min-w-0">
             <p className="text-sm font-medium text-stone-800">Плотность информации</p>
