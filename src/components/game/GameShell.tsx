@@ -55,7 +55,6 @@ import { EmergencyDialog } from './EmergencyDialog';
 import { MentorWidget } from './MentorWidget';
 import { AchievementsWatcher } from './AchievementsWatcher';
 import { useUiPrefs } from '@/lib/game/store/uiPrefs';
-import { useThemeStore } from '@/lib/game/store/themeStore';
 import { getCharacterMood } from '@/lib/game/presentation/characters';
 import type { CharacterId, Mood } from '@/lib/game/presentation/types';
 import { useArtStore } from '@/lib/game/presentation/artState';
